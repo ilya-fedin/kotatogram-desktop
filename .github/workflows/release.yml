@@ -401,14 +401,15 @@ jobs:
           git clone https://chromium.googlesource.com/linux-syscall-support src/third_party/lss
           cd src/third_party/lss
           git checkout a91633d1
-          cd ../../..
+          cd ../..
+          git clone https://github.com/google/googletest testing
+          cd ../
           ./configure
           make -j8
           sudo make install
           cd src/tools
           ../../../gyp/gyp  --depth=. --generator-output=.. -Goutput_dir=../out tools.gyp --format=cmake
           cd ../../out/Default
-          set +e
           cmake .
           make -j8 dump_syms
       - name: Qt 5.6.2
