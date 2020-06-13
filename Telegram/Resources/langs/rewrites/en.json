@@ -181,6 +181,7 @@
 	"ktg_admin_log_banned_send_games": "Send games",
 	"ktg_admin_log_banned_use_inline": "Use inline bots",
 	"ktg_forward_go_to_chat": "Go to chat",
+	"ktg_settings_block_users_in_groups": "Block users in groups",
 	"ktg_settings_forward": "Forward",
 	"ktg_settings_forward_retain_selection": "Retain selection after forward",
 	"ktg_settings_forward_chat_on_click": "Open chat on click",

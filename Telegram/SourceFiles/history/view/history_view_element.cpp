@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/toast/toast.h"
 #include "ui/toasts/common_toasts.h"
 #include "data/data_session.h"
+#include "data/data_user.h"
 #include "data/data_groups.h"
 #include "data/data_media_types.h"
 #include "lang/lang_keys.h"
@@ -433,6 +434,12 @@ bool Element::isHiddenByGroup() const {
 }
 
 bool Element::isHidden() const {
+	if (BlockUsersInGroups()
+		&& data()->from()->isUser()
+		&& data()->from()->asUser()->isBlocked()) {
+		return true;
+	}
+
 	return isHiddenByGroup();
 }
 

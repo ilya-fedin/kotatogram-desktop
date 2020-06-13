@@ -364,6 +364,7 @@ QByteArray GenerateSettingsJson(bool areDefault = false) {
 	settings.insert(qsl("sticker_scale_both"), StickerScaleBoth());
 	settings.insert(qsl("adaptive_bubbles"), AdaptiveBubbles());
 	settings.insert(qsl("big_emoji_outline"), BigEmojiOutline());
+	settings.insert(qsl("block_users_in_groups"), BlockUsersInGroups());
 	settings.insert(qsl("always_show_scheduled"), cAlwaysShowScheduled());
 	settings.insert(qsl("show_chat_id"), cShowChatId());
 	settings.insert(qsl("show_phone_in_drawer"), cShowPhoneInDrawer());
@@ -512,6 +513,10 @@ bool Manager::readCustomFile() {
 
 	ReadBoolOption(settings, "big_emoji_outline", [&](auto v) {
 		SetBigEmojiOutline(v);
+	});
+
+	ReadBoolOption(settings, "block_users_in_groups", [&](auto v) {
+		SetBlockUsersInGroups(v);
 	});
 
 	ReadBoolOption(settings, "always_show_scheduled", [&](auto v) {

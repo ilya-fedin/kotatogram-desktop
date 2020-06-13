@@ -53,6 +53,10 @@ void SetMonospaceLargeBubbles(bool enabled);
 [[nodiscard]] bool MonospaceLargeBubbles();
 [[nodiscard]] rpl::producer<bool> MonospaceLargeBubblesChanges();
 
+void SetBlockUsersInGroups(bool enabled);
+[[nodiscard]] bool BlockUsersInGroups();
+[[nodiscard]] rpl::producer<bool> BlockUsersInGroupsChanges();
+
 DeclareSetting(bool, AlwaysShowScheduled);
 DeclareSetting(int, ShowChatId);
 

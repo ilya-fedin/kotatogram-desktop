@@ -77,6 +77,17 @@ rpl::producer<bool> MonospaceLargeBubblesChanges() {
 	return gMonospaceLargeBubbles.changes();
 }
 
+rpl::variable<bool> gBlockUsersInGroups = false;
+void SetBlockUsersInGroups(bool enabled) {
+	gBlockUsersInGroups = enabled;
+}
+bool BlockUsersInGroups() {
+	return gBlockUsersInGroups.current();
+}
+rpl::producer<bool> BlockUsersInGroupsChanges() {
+	return gBlockUsersInGroups.changes();
+}
+
 bool gAlwaysShowScheduled = false;
 int gShowChatId = 2;
 

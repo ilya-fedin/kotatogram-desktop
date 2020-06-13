@@ -2992,6 +2992,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ktg_settings_forward_chat_on_click" = "Open chat on click";
 "ktg_settings_forward_chat_on_click_description" = "You can hold Ctrl to select multiple chats regardless of this option.";
 
+"ktg_settings_block_users_in_groups" = "Block users in groups";
+
 "ktg_forward_menu_quoted" = "Quoted";
 "ktg_forward_menu_unquoted" = "Unquoted with captions";
 "ktg_forward_menu_uncaptioned" = "Unquoted without captions";

@@ -349,7 +349,10 @@ void HistoryMessageReply::paint(
 	p.fillRect(rbar, bar);
 
 	if (w > st::msgReplyBarSkip) {
-		if (replyToMsg) {
+		auto blocked = replyToMsg
+			&& replyToMsg->from()->isUser()
+			&& replyToMsg->from()->asUser()->isBlocked();
+		if (replyToMsg && (!blocked || !BlockUsersInGroups())) {
 			auto hasPreview = replyToMsg->media() ? replyToMsg->media()->hasReplyPreview() : false;
 			if (hasPreview && w < st::msgReplyBarSkip + st::msgReplyBarSize.height()) {
 				hasPreview = false;
@@ -390,7 +393,7 @@ void HistoryMessageReply::paint(
 			p.setFont(st::msgDateFont);
 			auto &date = outbg ? (selected ? st::msgOutDateFgSelected : st::msgOutDateFg) : (selected ? st::msgInDateFgSelected : st::msgInDateFg);
 			p.setPen((flags & PaintFlag::InBubble) ? date : st::msgDateImgFg);
-			p.drawTextLeft(x + st::msgReplyBarSkip, y + st::msgReplyPadding.top() + (st::msgReplyBarSize.height() - st::msgDateFont->height) / 2, w + 2 * x, st::msgDateFont->elided(replyToMsgId ? tr::lng_profile_loading(tr::now) : tr::lng_deleted_message(tr::now), w - st::msgReplyBarSkip));
+			p.drawTextLeft(x + st::msgReplyBarSkip, y + st::msgReplyPadding.top() + (st::msgReplyBarSize.height() - st::msgDateFont->height) / 2, w + 2 * x, st::msgDateFont->elided((replyToMsgId && (!blocked || !BlockUsersInGroups())) ? tr::lng_profile_loading(tr::now) : tr::lng_deleted_message(tr::now), w - st::msgReplyBarSkip));
 		}
 	}
 }
