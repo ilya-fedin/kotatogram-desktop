@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/history_item_components.h"
 
+#include "kotato/kotato_settings.h"
 #include "kotato/kotato_lang.h"
 #include "api/api_text_entities.h"
 #include "base/qt/qt_key_modifiers.h"
@@ -459,16 +460,26 @@ void HistoryMessageReply::updateData(
 		&& (asExternal || _fields.manualQuote);
 	_multiline = !_fields.storyId && (asExternal || nonEmptyQuote);
 
+	const auto author = resolvedMessage
+		? resolvedMessage->from().get()
+		: resolvedStory
+		? resolvedStory->peer().get()
+		: nullptr;
+	const auto blocked = author
+		&& author->isUser()
+		&& author->asUser()->isBlocked();
+	const auto blockUsersInGroups = ::Kotato::JsonSettings::GetBool("block_users_in_groups");
+
 	const auto displaying = resolvedMessage
 		|| resolvedStory
 		|| ((nonEmptyQuote || _fields.externalMedia)
 			&& (!_fields.messageId || force));
-	_displaying = displaying ? 1 : 0;
+	_displaying = displaying && !blocked ? 1 : 0;
 
 	const auto unavailable = !resolvedMessage
 		&& !resolvedStory
 		&& ((!_fields.storyId && !_fields.messageId) || force);
-	_unavailable = unavailable ? 1 : 0;
+	_unavailable = unavailable && !blocked ? 1 : 0;
 
 	if (force) {
 		if (!_displaying && (_fields.messageId || _fields.storyId)) {

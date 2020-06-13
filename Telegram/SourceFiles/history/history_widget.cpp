@@ -806,6 +806,26 @@ HistoryWidget::HistoryWidget(
 		});
 	}, lifetime());
 
+	rpl::merge(
+		::Kotato::JsonSettings::Events(
+			"block_users_in_groups"
+		) | rpl::to_empty,
+		session().changes().peerUpdates(
+			Data::PeerUpdate::Flag::IsBlocked
+		) | rpl::to_empty
+	) | rpl::start_with_next([=] {
+		crl::on_main(this, [=] {
+			if (_history) {
+				_history->forceFullResize();
+				if (_migrated) {
+					_migrated->forceFullResize();
+				}
+				updateHistoryGeometry();
+				update();
+			}
+		});
+	}, lifetime());
+
 	session().data().channelDifferenceTooLong(
 	) | rpl::filter([=](not_null<ChannelData*> channel) {
 		return _peer == channel.get();

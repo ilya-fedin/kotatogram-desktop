@@ -358,6 +358,7 @@ void SetupKotatoMessages(not_null<Ui::VerticalLayout*> container) {
 	}
 
 	SettingsMenuJsonSwitch(ktg_settings_emoji_outline, big_emoji_outline);
+	SettingsMenuJsonSwitch(ktg_settings_block_users_in_groups, block_users_in_groups);
 
 	Ui::AddSkip(container);
 }

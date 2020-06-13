@@ -256,6 +256,9 @@ const std::map<QString, Definition, std::greater<QString>> DefinitionMap {
 	{ "big_emoji_outline", {
 		.type = SettingType::BoolSetting,
 		.defaultValue = true, }},
+	{ "block_users_in_groups", {
+		.type = SettingType::BoolSetting,
+		.defaultValue = true, }},
 	{ "sticker_height", {
 		.type = SettingType::IntSetting,
 		.defaultValue = 170,

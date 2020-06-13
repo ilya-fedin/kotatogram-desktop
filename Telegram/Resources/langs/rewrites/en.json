@@ -119,6 +119,7 @@
 	"ktg_too_many_accounts_warning": "Warning! Using too many accounts at the same time is not recommended due to higher memory comsumption and possible crashes because of it.\n\nYou sure you want to add a new account?",
 	"ktg_account_add_anyway": "Add anyway",
 	"ktg_forward_go_to_chat": "Go to chat",
+	"ktg_settings_block_users_in_groups": "Block users in groups",
 	"ktg_settings_forward": "Forward",
 	"ktg_settings_forward_retain_selection": "Retain selection after forward",
 	"ktg_settings_forward_chat_on_click": "Open chat on click",
