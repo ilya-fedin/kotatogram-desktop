@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/tooltip.h"
 #include "ui/dynamic_image.h"
 #include "ui/painter.h"
+#include "ui/ui_utility.h"
 #include "styles/style_dialogs.h"
 
 #include <QtWidgets/QApplication>
@@ -904,7 +905,7 @@ TextWithEntities List::computeTooltipText() const {
 }
 
 void List::setShowTooltip(
-		not_null<QWidget*> tooltipParent,
+		not_null<Ui::RpWidget*> tooltipParent,
 		rpl::producer<bool> shown,
 		Fn<void()> hide) {
 	_tooltip = nullptr;
@@ -926,16 +927,6 @@ void List::setShowTooltip(
 	tooltip->toggleFast(false);
 	updateTooltipGeometry();
 
-	const auto handle = tooltipParent->window()->windowHandle();
-	auto windowActive = rpl::single(
-		handle->isActive()
-	) | rpl::then(base::qt_signal_producer(
-		handle,
-		&QWindow::activeChanged
-	) | rpl::map([=] {
-		return handle->isActive();
-	})) | rpl::distinct_until_changed();
-
 	{
 		const auto recompute = [=] {
 			updateTooltipGeometry();
@@ -956,7 +947,7 @@ void List::setShowTooltip(
 		_tooltipText.value() | rpl::map(
 			notEmpty
 		) | rpl::distinct_until_changed(),
-		std::move(windowActive)
+		tooltipParent->windowActiveValue()
 	) | rpl::start_with_next([=](bool, bool, bool active) {
 		_tooltipWindowActive = active;
 		if (!isHidden()) {
@@ -982,7 +973,7 @@ void List::toggleTooltip(bool fast) {
 		&& !isHidden()
 		&& _tooltipNotHidden.current()
 		&& !_tooltipText.current().empty()
-		&& window()->windowHandle()->isActive();
+		&& isActiveWindow();
 	if (_tooltip) {
 		if (fast) {
 			_tooltip->toggleFast(shown);

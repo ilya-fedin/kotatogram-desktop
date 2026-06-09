@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_premium.h" // Settings::ShowPremium.
 #include "settings/settings_privacy_controllers.h"
 #include "settings/settings_websites.h"
+#include "base/system_unlock.h"
 #include "base/timer_rpl.h"
 #include "boxes/passcode_box.h"
 #include "boxes/sessions_box.h"
@@ -31,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/core_settings.h"
 #include "ui/chat/chat_style.h"
+#include "ui/effects/premium_graphics.h"
 #include "ui/effects/premium_top_bar.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
@@ -80,7 +82,8 @@ using Privacy = Api::UserPrivacy;
 	image.fill(Qt::transparent);
 	{
 		auto p = QPainter(&image);
-		auto star = QSvgRenderer(Ui::Premium::ColorizedSvg());
+		auto star = QSvgRenderer(
+			Ui::Premium::ColorizedSvg(Ui::Premium::ButtonGradientStops()));
 		star.render(&p, Rect(size));
 	}
 	return image;
@@ -305,9 +308,7 @@ void AddPremiumPrivacyButton(
 				lt_link,
 				link,
 				Ui::Text::WithEntities),
-			.st = &st::defaultMultilineToast,
 			.duration = Ui::Toast::kDefaultDuration * 2,
-			.multiline = true,
 			.filter = crl::guard(&controller->session(), [=](
 					const ClickHandlerPtr &,
 					Qt::MouseButton button) {
@@ -575,47 +576,6 @@ void SetupTopPeers(
 
 	Ui::AddSkip(container);
 	Ui::AddDividerText(container, tr::lng_settings_top_peers_about());
-}
-
-void SetupSensitiveContent(
-		not_null<Window::SessionController*> controller,
-		not_null<Ui::VerticalLayout*> container,
-		rpl::producer<> updateTrigger) {
-	using namespace rpl::mappers;
-
-	const auto wrap = container->add(
-		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
-			container,
-			object_ptr<Ui::VerticalLayout>(container)));
-	const auto inner = wrap->entity();
-
-	Ui::AddSkip(inner);
-	Ui::AddSubsectionTitle(inner, tr::lng_settings_sensitive_title());
-
-	const auto session = &controller->session();
-
-	std::move(
-		updateTrigger
-	) | rpl::start_with_next([=] {
-		session->api().sensitiveContent().reload();
-	}, container->lifetime());
-	inner->add(object_ptr<Button>(
-		inner,
-		tr::lng_settings_sensitive_disable_filtering(),
-		st::settingsButtonNoIcon
-	))->toggleOn(
-		session->api().sensitiveContent().enabled()
-	)->toggledChanges(
-	) | rpl::filter([=](bool toggled) {
-		return toggled != session->api().sensitiveContent().enabledCurrent();
-	}) | rpl::start_with_next([=](bool toggled) {
-		session->api().sensitiveContent().update(toggled);
-	}, container->lifetime());
-
-	Ui::AddSkip(inner);
-	Ui::AddDividerText(inner, tr::lng_settings_sensitive_about());
-
-	wrap->toggleOn(session->api().sensitiveContent().canChange());
 }
 
 void SetupSelfDestruction(
@@ -911,6 +871,47 @@ void SetupSecurity(
 
 } // namespace
 
+void SetupSensitiveContent(
+		not_null<Window::SessionController*> controller,
+		not_null<Ui::VerticalLayout*> container,
+		rpl::producer<> updateTrigger) {
+	using namespace rpl::mappers;
+
+	const auto wrap = container->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			container,
+			object_ptr<Ui::VerticalLayout>(container)));
+	const auto inner = wrap->entity();
+
+	Ui::AddSkip(inner);
+	Ui::AddSubsectionTitle(inner, tr::lng_settings_sensitive_title());
+
+	const auto session = &controller->session();
+
+	std::move(
+		updateTrigger
+	) | rpl::start_with_next([=] {
+		session->api().sensitiveContent().reload();
+	}, container->lifetime());
+	inner->add(object_ptr<Button>(
+		inner,
+		tr::lng_settings_sensitive_disable_filtering(),
+		st::settingsButtonNoIcon
+	))->toggleOn(
+		session->api().sensitiveContent().enabled()
+	)->toggledChanges(
+	) | rpl::filter([=](bool toggled) {
+		return toggled != session->api().sensitiveContent().enabledCurrent();
+	}) | rpl::start_with_next([=](bool toggled) {
+		session->api().sensitiveContent().update(toggled);
+	}, container->lifetime());
+
+	Ui::AddSkip(inner);
+	Ui::AddDividerText(inner, tr::lng_settings_sensitive_about());
+
+	wrap->toggleOn(session->api().sensitiveContent().canChange());
+}
+
 int ExceptionUsersCount(const std::vector<not_null<PeerData*>> &exceptions) {
 	const auto add = [](int already, not_null<PeerData*> peer) {
 		if (const auto chat = peer->asChat()) {
@@ -1078,6 +1079,8 @@ PrivacySecurity::PrivacySecurity(
 	not_null<Window::SessionController*> controller)
 : Section(parent) {
 	setupContent(controller);
+
+	[[maybe_unused]] auto preload = base::SystemUnlockStatus();
 }
 
 rpl::producer<QString> PrivacySecurity::title() {
@@ -1097,11 +1100,6 @@ void PrivacySecurity::setupContent(
 	SetupSecurity(controller, content, trigger(), showOtherMethod());
 	SetupPrivacy(controller, content, trigger());
 	SetupTopPeers(controller, content);
-#if !defined OS_MAC_STORE && !defined OS_WIN_STORE
-	SetupSensitiveContent(controller, content, trigger());
-#else // !OS_MAC_STORE && !OS_WIN_STORE
-	AddDivider(content);
-#endif // !OS_MAC_STORE && !OS_WIN_STORE
 	SetupArchiveAndMute(controller, content);
 	SetupConfirmationExtensions(controller, content);
 	SetupBotsAndWebsites(controller, content);

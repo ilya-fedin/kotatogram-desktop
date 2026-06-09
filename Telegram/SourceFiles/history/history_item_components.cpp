@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/spoiler_mess.h"
 #include "ui/image/image.h"
 #include "ui/toast/toast.h"
+#include "ui/text/format_values.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/chat/chat_style.h"
@@ -49,9 +50,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "window/window_session_controller.h"
 #include "api/api_bot.h"
-#include "styles/style_widgets.h"
+#include "styles/style_boxes.h"
 #include "styles/style_chat.h"
 #include "styles/style_dialogs.h" // dialogsMiniReplyStory.
+#include "styles/style_settings.h"
+#include "styles/style_widgets.h"
 
 #include <QtGui/QGuiApplication>
 
@@ -228,14 +231,17 @@ void HistoryMessageForwarded::create(
 		phrase = tr::lng_forwarded_story(
 			tr::now,
 			lt_user,
-			Ui::Text::Link(phrase.text, QString()), // Link 1.
+			Ui::Text::Wrapped(phrase, EntityType::CustomUrl, QString()), // Link 1.
 			Ui::Text::WithEntities);
 	} else if (via && psaType.isEmpty()) {
+		const auto linkData = Ui::Text::Link(
+			QString(),
+			1).entities.front().data(); // Link 1.
 		if (fromChannel) {
 			phrase = tr::lng_forwarded_channel_via(
 				tr::now,
 				lt_channel,
-				Ui::Text::Link(phrase.text, 1), // Link 1.
+				Ui::Text::Wrapped(phrase, EntityType::CustomUrl, linkData), // Link 1.
 				lt_inline_bot,
 				Ui::Text::Link('@' + via->bot->username(), 2), // Link 2.
 				Ui::Text::WithEntities);
@@ -243,7 +249,7 @@ void HistoryMessageForwarded::create(
 			phrase = tr::lng_forwarded_via(
 				tr::now,
 				lt_user,
-				Ui::Text::Link(phrase.text, 1), // Link 1.
+				Ui::Text::Wrapped(phrase, EntityType::CustomUrl, linkData), // Link 1.
 				lt_inline_bot,
 				Ui::Text::Link('@' + via->bot->username(), 2), // Link 2.
 				Ui::Text::WithEntities);
@@ -687,6 +693,11 @@ ReplyKeyboard::ReplyKeyboard(
 		const auto context = _item->fullId();
 		const auto rowCount = int(markup->data.rows.size());
 		_rows.reserve(rowCount);
+		const auto buttonEmoji = Ui::Text::SingleCustomEmoji(
+			owner->customEmojiManager().registerInternalEmoji(
+				st::settingsPremiumIconStar,
+				QMargins(0, -st::moderateBoxExpandInnerSkip, 0, 0),
+				true));
 		for (auto i = 0; i != rowCount; ++i) {
 			const auto &row = markup->data.rows[i];
 			const auto rowSize = int(row.size());
@@ -694,17 +705,54 @@ ReplyKeyboard::ReplyKeyboard(
 			newRow.reserve(rowSize);
 			for (auto j = 0; j != rowSize; ++j) {
 				auto button = Button();
-				const auto text = row[j].text;
+				using Type = HistoryMessageMarkupButton::Type;
+				const auto isBuy = (row[j].type == Type::Buy);
+				static const auto RegExp = QRegularExpression("\\b"
+					+ Ui::kCreditsCurrency
+					+ "\\b");
+				const auto text = isBuy
+					? base::duplicate(row[j].text).replace(
+						RegExp,
+						QChar(0x2B50))
+					: row[j].text;
+				const auto textWithEntities = [&] {
+					if (!isBuy) {
+						return TextWithEntities();
+					}
+					auto result = TextWithEntities();
+					auto firstPart = true;
+					for (const auto &part : text.split(QChar(0x2B50))) {
+						if (!firstPart) {
+							result.append(buttonEmoji);
+						}
+						result.append(part);
+						firstPart = false;
+					}
+					return result.entities.empty()
+						? TextWithEntities()
+						: result;
+				}();
 				button.type = row.at(j).type;
 				button.link = std::make_shared<ReplyMarkupClickHandler>(
 					owner,
 					i,
 					j,
 					context);
-				button.text.setText(
-					_st->textStyle(),
-					TextUtilities::SingleLine(text),
-					kPlainTextOptions);
+				if (!textWithEntities.text.isEmpty()) {
+					button.text.setMarkedText(
+						_st->textStyle(),
+						TextUtilities::SingleLine(textWithEntities),
+						kMarkupTextOptions,
+						Core::MarkedTextContext{
+							.session = &item->history()->owner().session(),
+							.customEmojiRepaint = [=] { _st->repaint(item); },
+						});
+				} else {
+					button.text.setText(
+						_st->textStyle(),
+						TextUtilities::SingleLine(text),
+						kPlainTextOptions);
+				}
 				button.characters = text.isEmpty() ? 1 : text.size();
 				newRow.push_back(std::move(button));
 			}
@@ -1054,8 +1102,8 @@ void HistoryMessageReplyMarkup::updateData(
 bool HistoryMessageReplyMarkup::hiddenBy(Data::Media *media) const {
 	if (media && (data.flags & ReplyMarkupFlag::OnlyBuyButton)) {
 		if (const auto invoice = media->invoice()) {
-			if (invoice->extendedPreview
-				&& (!invoice->extendedMedia || !invoice->receiptMsgId)) {
+			if (HasUnpaidMedia(*invoice)
+				|| (HasExtendedMedia(*invoice) && !invoice->receiptMsgId)) {
 				return true;
 			}
 		}
@@ -1077,6 +1125,35 @@ HistoryMessageLogEntryOriginal &HistoryMessageLogEntryOriginal::operator=(
 }
 
 HistoryMessageLogEntryOriginal::~HistoryMessageLogEntryOriginal() = default;
+
+MessageFactcheck FromMTP(
+		not_null<HistoryItem*> item,
+		const tl::conditional<MTPFactCheck> &factcheck) {
+	return FromMTP(&item->history()->session(), factcheck);
+}
+
+MessageFactcheck FromMTP(
+		not_null<Main::Session*> session,
+		const tl::conditional<MTPFactCheck> &factcheck) {
+	auto result = MessageFactcheck();
+	if (!factcheck) {
+		return result;
+	}
+	const auto &data = factcheck->data();
+	if (const auto text = data.vtext()) {
+		const auto &data = text->data();
+		result.text = {
+			qs(data.vtext()),
+			Api::EntitiesFromMTP(session, data.ventities().v),
+		};
+	}
+	if (const auto country = data.vcountry()) {
+		result.country = qs(country->v);
+	}
+	result.hash = data.vhash().v;
+	result.needCheck = data.is_need_check();
+	return result;
+}
 
 HistoryDocumentCaptioned::HistoryDocumentCaptioned()
 : caption(st::msgFileMinWidth - st::msgPadding.left() - st::msgPadding.right()) {

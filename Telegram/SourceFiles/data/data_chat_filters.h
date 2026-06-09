@@ -62,6 +62,7 @@ public:
 		FilterId id,
 		const QString &title,
 		const QString &iconEmoji,
+		std::optional<uint8> colorIndex,
 		Flags flags,
 		base::flat_set<not_null<History*>> always,
 		std::vector<not_null<History*>> pinned,
@@ -91,6 +92,7 @@ public:
 	[[nodiscard]] QString title() const;
 	[[nodiscard]] bool isDefault() const;
 	[[nodiscard]] QString iconEmoji() const;
+	[[nodiscard]] std::optional<uint8> colorIndex() const;
 	[[nodiscard]] Flags flags() const;
 	[[nodiscard]] bool chatlist() const;
 	[[nodiscard]] bool hasMyLinks() const;
@@ -110,6 +112,7 @@ private:
 	FilterId _id = 0;
 	QString _title;
 	QString _iconEmoji;
+	std::optional<uint8> _colorIndex;
 	base::flat_set<not_null<History*>> _always;
 	std::vector<not_null<History*>> _pinned;
 	base::flat_set<not_null<History*>> _never;
@@ -123,6 +126,7 @@ private:
 inline bool operator==(const ChatFilter &a, const ChatFilter &b) {
 	return (a.title() == b.title())
 		&& (a.iconEmoji() == b.iconEmoji())
+		&& (a.colorIndex() == b.colorIndex())
 		&& (a.flags() == b.flags())
 		&& (a.always() == b.always())
 		&& (a.never() == b.never());

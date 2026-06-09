@@ -42,14 +42,17 @@ void InnerFillMessagePostFlags(
 		const SendOptions &options,
 		not_null<PeerData*> peer,
 		MessageFlags &flags) {
-	const auto anonymousPost = peer->amAnonymous();
 	if (ShouldSendSilent(peer, options)) {
 		flags |= MessageFlag::Silent;
 	}
-	if (!anonymousPost || options.sendAs) {
+	if (!peer->amAnonymous()
+		|| (!peer->isBroadcast()
+			&& options.sendAs
+			&& options.sendAs != peer)) {
 		flags |= MessageFlag::HasFromId;
-		return;
-	} else if (peer->asMegagroup()) {
+	}
+	const auto channel = peer->asBroadcast();
+	if (!channel) {
 		return;
 	}
 	flags |= MessageFlag::Post;
@@ -58,9 +61,82 @@ void InnerFillMessagePostFlags(
 		return;
 	}
 	flags |= MessageFlag::HasViews;
-	if (peer->asChannel()->addsSignature()) {
+	if (channel->addsSignature()) {
 		flags |= MessageFlag::HasPostAuthor;
 	}
+}
+
+void SendSimpleMedia(SendAction action, MTPInputMedia inputMedia) {
+	const auto history = action.history;
+	const auto peer = history->peer;
+	const auto session = &history->session();
+	const auto api = &session->api();
+
+	action.clearDraft = false;
+	action.generateLocal = false;
+	api->sendAction(action);
+
+	const auto randomId = base::RandomValue<uint64>();
+
+	auto flags = NewMessageFlags(peer);
+	auto sendFlags = MTPmessages_SendMedia::Flags(0);
+	if (action.replyTo) {
+		flags |= MessageFlag::HasReplyInfo;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to;
+	}
+	const auto silentPost = ShouldSendSilent(peer, action.options);
+	InnerFillMessagePostFlags(action.options, peer, flags);
+	if (silentPost) {
+		sendFlags |= MTPmessages_SendMedia::Flag::f_silent;
+	}
+	const auto sendAs = action.options.sendAs;
+	if (sendAs) {
+		sendFlags |= MTPmessages_SendMedia::Flag::f_send_as;
+	}
+	const auto messagePostAuthor = peer->isBroadcast()
+		? session->user()->name()
+		: QString();
+
+	if (action.options.scheduled) {
+		flags |= MessageFlag::IsOrWasScheduled;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_schedule_date;
+	}
+	if (action.options.shortcutId) {
+		flags |= MessageFlag::ShortcutMessage;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_quick_reply_shortcut;
+	}
+	if (action.options.effectId) {
+		sendFlags |= MTPmessages_SendMedia::Flag::f_effect;
+	}
+	if (action.options.invertCaption) {
+		flags |= MessageFlag::InvertMedia;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_invert_media;
+	}
+
+	auto &histories = history->owner().histories();
+	histories.sendPreparedMessage(
+		history,
+		action.replyTo,
+		randomId,
+		Data::Histories::PrepareMessage<MTPmessages_SendMedia>(
+			MTP_flags(sendFlags),
+			peer->input,
+			Data::Histories::ReplyToPlaceholder(),
+			std::move(inputMedia),
+			MTPstring(),
+			MTP_long(randomId),
+			MTPReplyMarkup(),
+			MTPvector<MTPMessageEntity>(),
+			MTP_int(action.options.scheduled),
+			(sendAs ? sendAs->input : MTP_inputPeerEmpty()),
+			Data::ShortcutIdToMTP(session, action.options.shortcutId),
+			MTP_long(action.options.effectId)
+		), [=](const MTPUpdates &result, const MTP::Response &response) {
+	}, [=](const MTP::Error &error, const MTP::Response &response) {
+		api->sendMessageFail(error, peer, randomId);
+	});
+
+	api->finishForwarding(action);
 }
 
 template <typename MediaData>
@@ -95,25 +171,15 @@ void SendExistingMedia(
 		flags |= MessageFlag::HasReplyInfo;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to;
 	}
-	const auto anonymousPost = peer->amAnonymous();
 	const auto silentPost = ShouldSendSilent(peer, action.options);
 	InnerFillMessagePostFlags(action.options, peer, flags);
 	if (silentPost) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_silent;
 	}
 	const auto sendAs = action.options.sendAs;
-	const auto messageFromId = sendAs
-		? sendAs->id
-		: anonymousPost
-		? 0
-		: session->userPeerId();
 	if (sendAs) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_send_as;
 	}
-	const auto messagePostAuthor = peer->isBroadcast()
-		? session->user()->name()
-		: QString();
-
 	auto caption = TextWithEntities{
 		message.textWithTags.text,
 		TextUtilities::ConvertTextTagsToEntities(message.textWithTags.tags)
@@ -136,17 +202,25 @@ void SendExistingMedia(
 		flags |= MessageFlag::ShortcutMessage;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_quick_reply_shortcut;
 	}
+	if (action.options.effectId) {
+		sendFlags |= MTPmessages_SendMedia::Flag::f_effect;
+	}
+	if (action.options.invertCaption) {
+		flags |= MessageFlag::InvertMedia;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_invert_media;
+	}
 
 	session->data().registerMessageRandomId(randomId, newId);
 
 	history->addNewLocalMessage({
 		.id = newId.msg,
 		.flags = flags,
-		.from = messageFromId,
+		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
-		.date = HistoryItem::NewMessageDate(action.options),
+		.date = NewMessageDate(action.options),
 		.shortcutId = action.options.shortcutId,
-		.postAuthor = messagePostAuthor,
+		.postAuthor = NewMessagePostAuthor(action),
+		.effectId = action.options.effectId,
 	}, media, caption);
 
 	const auto performRequest = [=](const auto &repeatRequest) -> void {
@@ -167,7 +241,8 @@ void SendExistingMedia(
 				sentEntities,
 				MTP_int(action.options.scheduled),
 				(sendAs ? sendAs->input : MTP_inputPeerEmpty()),
-				Data::ShortcutIdToMTP(session, action.options.shortcutId)
+				Data::ShortcutIdToMTP(session, action.options.shortcutId),
+				MTP_long(action.options.effectId)
 			), [=](const MTPUpdates &result, const MTP::Response &response) {
 		}, [=](const MTP::Error &error, const MTP::Response &response) {
 			if (error.code() == 400
@@ -317,25 +392,15 @@ bool SendDice(
 		flags |= MessageFlag::HasReplyInfo;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_reply_to;
 	}
-	const auto anonymousPost = peer->amAnonymous();
 	const auto silentPost = ShouldSendSilent(peer, action.options);
 	InnerFillMessagePostFlags(action.options, peer, flags);
 	if (silentPost) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_silent;
 	}
 	const auto sendAs = action.options.sendAs;
-	const auto messageFromId = sendAs
-		? sendAs->id
-		: anonymousPost
-		? 0
-		: session->userPeerId();
 	if (sendAs) {
 		sendFlags |= MTPmessages_SendMedia::Flag::f_send_as;
 	}
-	const auto messagePostAuthor = peer->isBroadcast()
-		? session->user()->name()
-		: QString();
-
 	if (action.options.scheduled) {
 		flags |= MessageFlag::IsOrWasScheduled;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_schedule_date;
@@ -344,17 +409,25 @@ bool SendDice(
 		flags |= MessageFlag::ShortcutMessage;
 		sendFlags |= MTPmessages_SendMedia::Flag::f_quick_reply_shortcut;
 	}
+	if (action.options.effectId) {
+		sendFlags |= MTPmessages_SendMedia::Flag::f_effect;
+	}
+	if (action.options.invertCaption) {
+		flags |= MessageFlag::InvertMedia;
+		sendFlags |= MTPmessages_SendMedia::Flag::f_invert_media;
+	}
 
 	session->data().registerMessageRandomId(randomId, newId);
 
 	history->addNewLocalMessage({
 		.id = newId.msg,
 		.flags = flags,
-		.from = messageFromId,
+		.from = NewMessageFromId(action),
 		.replyTo = action.replyTo,
-		.date = HistoryItem::NewMessageDate(action.options),
+		.date = NewMessageDate(action.options),
 		.shortcutId = action.options.shortcutId,
-		.postAuthor = messagePostAuthor,
+		.postAuthor = NewMessagePostAuthor(action),
+		.effectId = action.options.effectId,
 	}, TextWithEntities(), MTP_messageMediaDice(
 		MTP_int(0),
 		MTP_string(emoji)));
@@ -373,7 +446,8 @@ bool SendDice(
 			MTP_vector<MTPMessageEntity>(),
 			MTP_int(action.options.scheduled),
 			(sendAs ? sendAs->input : MTP_inputPeerEmpty()),
-			Data::ShortcutIdToMTP(session, action.options.shortcutId)
+			Data::ShortcutIdToMTP(session, action.options.shortcutId),
+			MTP_long(action.options.effectId)
 		), [=](const MTPUpdates &result, const MTP::Response &response) {
 	}, [=](const MTP::Error &error, const MTP::Response &response) {
 		api->sendMessageFail(error, peer, randomId, newId);
@@ -382,6 +456,33 @@ bool SendDice(
 		api->finishForwarding(action);
 	}
 	return true;
+}
+
+void SendLocation(SendAction action, float64 lat, float64 lon) {
+	SendSimpleMedia(
+		action,
+		MTP_inputMediaGeoPoint(
+			MTP_inputGeoPoint(
+				MTP_flags(0),
+				MTP_double(lat),
+				MTP_double(lon),
+				MTPint()))); // accuracy_radius
+}
+
+void SendVenue(SendAction action, Data::InputVenue venue) {
+	SendSimpleMedia(
+		action,
+		MTP_inputMediaVenue(
+			MTP_inputGeoPoint(
+				MTP_flags(0),
+				MTP_double(venue.lat),
+				MTP_double(venue.lon),
+				MTPint()), // accuracy_radius
+			MTP_string(venue.title),
+			MTP_string(venue.address),
+			MTP_string(venue.provider),
+			MTP_string(venue.id),
+			MTP_string(venue.venueType)));
 }
 
 void FillMessagePostFlags(
@@ -451,7 +552,6 @@ void SendConfirmedFile(
 	if (file->to.replyTo) {
 		flags |= MessageFlag::HasReplyInfo;
 	}
-	const auto anonymousPost = peer->amAnonymous();
 	FillMessagePostFlags(action, peer, flags);
 	if (file->to.options.scheduled) {
 		flags |= MessageFlag::IsOrWasScheduled;
@@ -470,16 +570,9 @@ void SendConfirmedFile(
 			flags |= MessageFlag::MediaIsUnread;
 		}
 	}
-
-	const auto messageFromId = file->to.options.sendAs
-		? file->to.options.sendAs->id
-		: anonymousPost
-		? PeerId()
-		: session->userPeerId();
-	const auto messagePostAuthor = peer->isBroadcast()
-		? session->user()->name()
-		: QString();
-
+	if (file->to.options.invertCaption) {
+		flags |= MessageFlag::InvertMedia;
+	}
 	const auto media = MTPMessageMedia([&] {
 		if (file->type == SendMediaType::Photo) {
 			using Flag = MTPDmessageMediaPhoto::Flag;
@@ -494,7 +587,7 @@ void SendConfirmedFile(
 				MTP_flags(Flag::f_document
 					| (file->spoiler ? Flag::f_spoiler : Flag())),
 				file->document,
-				MTPDocument(), // alt_document
+				MTPVector<MTPDocument>(), // alt_documents
 				MTPint());
 		} else if (file->type == SendMediaType::Audio) {
 			const auto ttlSeconds = file->to.options.ttlSeconds;
@@ -519,7 +612,7 @@ void SendConfirmedFile(
 					| (isVoice ? Flag::f_voice : Flag())
 					| (ttlSeconds ? Flag::f_ttl_seconds : Flag())),
 				file->document,
-				MTPDocument(), // alt_document
+				MTPVector<MTPDocument>(), // alt_documents
 				MTP_int(ttlSeconds));
 		} else {
 			Unexpected("Type in sendFilesConfirmed.");
@@ -533,6 +626,7 @@ void SendConfirmedFile(
 		edition.ttl = 0;
 		edition.mtpMedia = &media;
 		edition.textWithEntities = caption;
+		edition.invertMedia = file->to.options.invertCaption;
 		edition.useSameViews = true;
 		edition.useSameForwards = true;
 		edition.useSameMarkup = true;
@@ -544,12 +638,13 @@ void SendConfirmedFile(
 		history->addNewLocalMessage({
 			.id = newId.msg,
 			.flags = flags,
-			.from = messageFromId,
+			.from = NewMessageFromId(action),
 			.replyTo = file->to.replyTo,
-			.date = HistoryItem::NewMessageDate(file->to.options),
+			.date = NewMessageDate(file->to.options),
 			.shortcutId = file->to.options.shortcutId,
-			.postAuthor = messagePostAuthor,
+			.postAuthor = NewMessagePostAuthor(action),
 			.groupedId = groupId,
+			.effectId = file->to.options.effectId,
 		}, caption, media);
 	}
 

@@ -34,7 +34,8 @@ Invoice::Invoice(
 }
 
 void Invoice::fillFromData(not_null<Data::Invoice*> invoice) {
-	if (invoice->photo) {
+	const auto isCreditsCurrency = false;
+	if (invoice->photo && !isCreditsCurrency) {
 		const auto spoiler = false;
 		_attach = std::make_unique<Photo>(
 			_parent,
@@ -64,6 +65,9 @@ void Invoice::fillFromData(not_null<Data::Invoice*> invoice) {
 		0,
 		int(statusText.text.size()) });
 	statusText.text += ' ' + labelText().toUpper();
+	if (isCreditsCurrency) {
+		statusText = {};
+	}
 	_status.setMarkedText(
 		st::defaultTextStyle,
 		statusText,
@@ -241,6 +245,7 @@ void Invoice::draw(Painter &p, const PaintContext &context) const {
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.selection = toDescriptionSelection(context.selection),
+			.useFullWidth = true,
 		});
 		tshift += _descriptionHeight;
 	}

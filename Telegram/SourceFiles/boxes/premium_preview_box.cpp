@@ -132,6 +132,8 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		return tr::lng_premium_summary_subtitle_translation();
 	case PremiumFeature::Business:
 		return tr::lng_premium_summary_subtitle_business();
+	case PremiumFeature::Effects:
+		return tr::lng_premium_summary_subtitle_effects();
 
 	case PremiumFeature::BusinessLocation:
 		return tr::lng_business_subtitle_location();
@@ -193,6 +195,8 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		return tr::lng_premium_summary_about_translation();
 	case PremiumFeature::Business:
 		return tr::lng_premium_summary_about_business();
+	case PremiumFeature::Effects:
+		return tr::lng_premium_summary_about_effects();
 
 	case PremiumFeature::BusinessLocation:
 		return tr::lng_business_about_location();
@@ -287,7 +291,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 			document,
 			media->videoThumbnailContent(),
 			QString(),
-			true);
+			Stickers::EffectType::PremiumSticker);
 
 		const auto update = [=] {
 			if (!state->readyInvoked
@@ -530,6 +534,7 @@ struct VideoPreviewDocument {
 		case PremiumFeature::Wallpapers: return "wallpapers";
 		case PremiumFeature::LastSeen: return "last_seen";
 		case PremiumFeature::MessagePrivacy: return "message_privacy";
+		case PremiumFeature::Effects: return "effects";
 
 		case PremiumFeature::BusinessLocation: return "business_location";
 		case PremiumFeature::BusinessHours: return "business_hours";

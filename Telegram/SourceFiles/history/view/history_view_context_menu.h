@@ -61,6 +61,10 @@ void CopyPostLink(
 	not_null<Window::SessionController*> controller,
 	FullMsgId itemId,
 	Context context);
+void CopyPostLink(
+	std::shared_ptr<Main::SessionShow> show,
+	FullMsgId itemId,
+	Context context);
 void CopyStoryLink(
 	std::shared_ptr<Main::SessionShow> show,
 	FullStoryId storyId);
@@ -118,6 +122,10 @@ void AddEmojiPacksAction(
 	not_null<HistoryItem*> item,
 	EmojiPacksSource source,
 	not_null<Window::SessionController*> controller);
+void AddSelectRestrictionAction(
+	not_null<Ui::PopupMenu*> menu,
+	not_null<HistoryItem*> item,
+	bool addIcon);
 
 [[nodiscard]] TextWithEntities TransribedText(not_null<HistoryItem*> item);
 

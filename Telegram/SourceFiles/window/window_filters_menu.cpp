@@ -16,6 +16,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_peer_menu.h"
 #include "main/main_session.h"
 #include "main/main_account.h"
+#include "core/application.h"
+#include "core/core_settings.h"
+#include "window/notifications_manager.h"
 #include "data/data_session.h"
 #include "data/data_chat_filters.h"
 #include "data/data_folder.h"
@@ -29,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/popup_menu.h"
 #include "ui/toast/toast.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/ui_utility.h"
 #include "boxes/filters/edit_filter_box.h"
 #include "boxes/premium_limits_box.h"
 #include "settings/settings_folders.h"
@@ -94,7 +98,15 @@ FiltersMenu::FiltersMenu(
 , _scroll(&_outer)
 , _container(
 	_scroll.setOwnedWidget(
-		object_ptr<Ui::VerticalLayout>(&_scroll))) {
+		object_ptr<Ui::VerticalLayout>(&_scroll)))
+, _includeMuted(Core::App().settings().includeMutedCounterFolders()) {
+	Core::App().notifications().settingsChanged(
+	) | rpl::filter(
+		rpl::mappers::_1 == Window::Notifications::ChangeType::IncludeMuted
+	) | rpl::start_with_next([=] {
+		_includeMuted = Core::App().settings().includeMutedCounterFolders();
+	}, _outer.lifetime());
+
 	_drag.timer.setCallback([=] {
 		if (_drag.filterId >= 0) {
 			_session->setActiveChatsFilter(_drag.filterId);
@@ -171,6 +183,7 @@ void FiltersMenu::setup() {
 
 void FiltersMenu::setupMainMenuIcon() {
 	OtherAccountsUnreadState(
+		&_session->session().account()
 	) | rpl::start_with_next([=](const OthersUnreadState &state) {
 		const auto icon = !state.count
 			? nullptr
@@ -317,28 +330,21 @@ base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareButton(
 		: Ui::FilterIcon::All);
 	raw->setIconOverride(icons.normal, icons.active);
 	if (id >= 0) {
-		UnreadStateValue(
-			&_session->session(),
-			id
-		) | rpl::start_with_next([=](const Dialogs::UnreadState &state) {
-			const auto count = (state.chats + state.marks);
+		rpl::combine(
+			UnreadStateValue(&_session->session(), id),
+			_includeMuted.value()
+		) | rpl::start_with_next([=](
+				const Dialogs::UnreadState &state,
+				bool includeMuted) {
 			const auto muted = (state.chatsMuted + state.marksMuted);
-			if (::Kotato::JsonSettings::GetBool("folders/count_unmuted_only")) {
-				const auto unmuted = count - muted;
-				const auto string = !unmuted
-					? QString()
-					: (unmuted > 99)
-					? "99+"
-					: QString::number(unmuted);
-				raw->setBadge(string, false);
-			} else {
-				const auto string = !count
-					? QString()
-					: (count > 99)
-					? "99+"
-					: QString::number(count);
-				raw->setBadge(string, count == muted);
-			}
+			const auto count = (state.chats + state.marks)
+				- (includeMuted ? 0 : muted);
+			const auto string = !count
+				? QString()
+				: (count > 99)
+				? "99+"
+				: QString::number(count);
+			raw->setBadge(string, includeMuted && (count == muted));
 		}, raw->lifetime());
 	}
 	raw->setActive(_session->activeChatsFilterCurrent() == id);

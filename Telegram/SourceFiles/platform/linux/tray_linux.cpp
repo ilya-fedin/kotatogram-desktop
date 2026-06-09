@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "kotato/kotato_settings.h"
 #include "base/invoke_queued.h"
 #include "base/qt_signal_producer.h"
+#include "base/platform/linux/base_linux_dbus_utilities.h"
 #include "core/application.h"
 #include "core/sandbox.h"
 #include "platform/platform_specific.h"
@@ -23,8 +24,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QSystemTrayIcon>
 
+#include <gio/gio.hpp>
+
 namespace Platform {
 namespace {
+
+using namespace gi::repository;
 
 [[nodiscard]] QString PanelIconName(int counter, bool muted) {
 	const auto useTelegramPanelIcon = ::Kotato::JsonSettings::GetBool("use_telegram_panel_icon");
@@ -309,11 +314,29 @@ rpl::producer<> TrayEventFilter::contextMenuFilters() const {
 }
 
 Tray::Tray() {
-	LOG(("System tray available: %1").arg(Logs::b(TrayIconSupported())));
+	auto connection = Gio::bus_get_sync(Gio::BusType::SESSION_, nullptr);
+	if (connection) {
+		_sniWatcher = std::make_unique<base::Platform::DBus::ServiceWatcher>(
+			connection.gobj_(),
+			"org.kde.StatusNotifierWatcher",
+			[=](
+					const std::string &service,
+					const std::string &oldOwner,
+					const std::string &newOwner) {
+				Core::Sandbox::Instance().customEnterFromEventLoop([&] {
+					if (hasIcon()) {
+						destroyIcon();
+						createIcon();
+					}
+				});
+			});
+	}
 }
 
 void Tray::createIcon() {
 	if (!_icon) {
+		LOG(("System tray available: %1").arg(Logs::b(TrayIconSupported())));
+
 		if (!_iconGraphic) {
 			_iconGraphic = std::make_unique<IconGraphic>();
 		}

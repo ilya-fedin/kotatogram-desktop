@@ -9,7 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "history/view/history_view_element.h"
 #include "history/admin_log/history_admin_log_item.h"
-#include "history/admin_log/history_admin_log_section.h"
+#include "history/admin_log/history_admin_log_filter_value.h"
 #include "menu/menu_antispam_validator.h"
 #include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
@@ -34,6 +34,7 @@ enum class PointState : char;
 namespace Ui {
 class PopupMenu;
 class ChatStyle;
+class ChatTheme;
 struct PeerUserpicView;
 } // namespace Ui
 
@@ -93,7 +94,7 @@ public:
 	HistoryView::Context elementContext() override;
 	bool elementUnderCursor(
 		not_null<const HistoryView::Element*> view) override;
-	bool elementInSelectionMode() override;
+	HistoryView::SelectionModeResult elementInSelectionMode() override;
 	bool elementIntersectsRange(
 		not_null<const HistoryView::Element*> view,
 		int from,
@@ -136,7 +137,12 @@ public:
 		HistoryView::Element *replacing) override;
 	void elementCancelPremium(
 		not_null<const HistoryView::Element*> view) override;
+	void elementStartEffect(
+		not_null<const HistoryView::Element*> view,
+		HistoryView::Element *replacing) override;
 	QString elementAuthorRank(
+		not_null<const HistoryView::Element*> view) override;
+	bool elementHideTopicButton(
 		not_null<const HistoryView::Element*> view) override;
 
 	~InnerWidget();

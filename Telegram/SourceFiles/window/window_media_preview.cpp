@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_sticker.h"
 #include "ui/image/image.h"
 #include "ui/emoji_config.h"
+#include "ui/ui_utility.h"
 #include "lottie/lottie_single_player.h"
 #include "main/main_session.h"
 #include "window/window_session_controller.h"
@@ -339,7 +340,7 @@ void MediaPreviewWidget::setupLottie() {
 			_document,
 			_documentMedia->videoThumbnailContent(),
 			QString(),
-			true);
+			Stickers::EffectType::PremiumSticker);
 	} else {
 		const auto size = currentDimensions();
 		_lottie = std::make_unique<Lottie::SinglePlayer>(

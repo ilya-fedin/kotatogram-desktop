@@ -13,9 +13,9 @@ class History;
 enum class SendMediaType;
 
 namespace Api {
+struct MessageToSend;
 struct SendAction;
 struct SendOptions;
-struct MessageToSend;
 } // namespace Api
 
 namespace Data {
@@ -37,6 +37,10 @@ class Result;
 namespace Main {
 class Session;
 } // namespace Main
+
+namespace SendMenu {
+struct Details;
+} // namespace SendMenu
 
 namespace Ui {
 struct PreparedList;
@@ -114,10 +118,9 @@ private:
 		bool ctrlShiftEnter);
 	void finishSending(bool skipToast = false);
 
-	void sendExistingDocument(not_null<DocumentData*> document);
 	bool sendExistingDocument(
 		not_null<DocumentData*> document,
-		Api::SendOptions options,
+		Api::MessageToSend messageToSend,
 		std::optional<MsgId> localId);
 	void sendExistingPhoto(not_null<PhotoData*> photo);
 	bool sendExistingPhoto(
@@ -140,6 +143,8 @@ private:
 	void send(Api::SendOptions options);
 	void sendVoice(VoiceToSend &&data);
 	void chooseAttach(std::optional<bool> overrideSendImagesAsPhotos);
+
+	[[nodiscard]] Fn<SendMenu::Details()> sendMenuDetails() const;
 
 	void showPremiumToast(not_null<DocumentData*> emoji);
 	[[nodiscard]] bool showSlowmodeError();

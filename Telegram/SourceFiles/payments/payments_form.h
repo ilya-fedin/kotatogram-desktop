@@ -120,6 +120,99 @@ struct PaymentMethod {
 	Ui::PaymentMethodDetails ui;
 };
 
+struct InvoiceMessage {
+	not_null<PeerData*> peer;
+	MsgId itemId = 0;
+};
+
+struct InvoiceSlug {
+	not_null<Main::Session*> session;
+	QString slug;
+};
+
+struct InvoicePremiumGiftCodeGiveaway {
+	not_null<ChannelData*> boostPeer;
+	std::vector<not_null<ChannelData*>> additionalChannels;
+	std::vector<QString> countries;
+	QString additionalPrize;
+	TimeId untilDate = 0;
+	bool onlyNewSubscribers = false;
+	bool showWinners = false;
+};
+
+struct InvoicePremiumGiftCodeUsers {
+	std::vector<not_null<UserData*>> users;
+	ChannelData *boostPeer = nullptr;
+	TextWithEntities message;
+};
+
+struct InvoicePremiumGiftCode {
+	std::variant<
+		InvoicePremiumGiftCodeUsers,
+		InvoicePremiumGiftCodeGiveaway> purpose;
+
+	QString currency;
+	QString storeProduct;
+	std::optional<uint64> creditsAmount;
+	uint64 randomId = 0;
+	uint64 amount = 0;
+	int storeQuantity = 0;
+	int users = 0;
+	int months = 0;
+};
+
+struct InvoiceCredits {
+	not_null<Main::Session*> session;
+	uint64 randomId = 0;
+	uint64 credits = 0;
+	QString product;
+	QString currency;
+	uint64 amount = 0;
+	bool extended = false;
+	PeerId giftPeerId = PeerId(0);
+};
+
+struct InvoiceStarGift {
+	uint64 giftId = 0;
+	uint64 randomId = 0;
+	TextWithEntities message;
+	not_null<UserData*> user;
+	int limitedCount = 0;
+	bool anonymous = false;
+};
+
+struct InvoiceId {
+	std::variant<
+		InvoiceMessage,
+		InvoiceSlug,
+		InvoicePremiumGiftCode,
+		InvoiceCredits,
+		InvoiceStarGift> value;
+};
+
+struct CreditsFormData {
+	InvoiceId id;
+	uint64 formId = 0;
+	uint64 botId = 0;
+	QString title;
+	QString description;
+	PhotoData *photo = nullptr;
+	InvoiceCredits invoice;
+	MTPInputInvoice inputInvoice;
+	int starGiftLimitedCount = 0;
+	bool starGiftForm = false;
+};
+
+struct CreditsReceiptData {
+	QString id;
+	QString title;
+	QString description;
+	PhotoData *photo = nullptr;
+	PeerId peerId = PeerId(0);
+	uint64 credits = 0;
+	TimeId date = 0;
+};
+
 struct ToggleProgress {
 	bool shown = true;
 };
@@ -141,6 +234,12 @@ struct BotTrustRequired {
 };
 struct PaymentFinished {
 	MTPUpdates updates;
+};
+struct CreditsPaymentStarted {
+	CreditsFormData data;
+};
+struct CreditsReceiptReady {
+	CreditsReceiptData data;
 };
 struct Error {
 	enum class Type {
@@ -173,56 +272,17 @@ struct FormUpdate : std::variant<
 	TmpPasswordRequired,
 	BotTrustRequired,
 	PaymentFinished,
+	CreditsPaymentStarted,
+	CreditsReceiptReady,
 	Error> {
 	using variant::variant;
-};
-
-struct InvoiceMessage {
-	not_null<PeerData*> peer;
-	MsgId itemId = 0;
-};
-
-struct InvoiceSlug {
-	not_null<Main::Session*> session;
-	QString slug;
-};
-
-struct InvoicePremiumGiftCodeGiveaway {
-	not_null<ChannelData*> boostPeer;
-	std::vector<not_null<ChannelData*>> additionalChannels;
-	std::vector<QString> countries;
-	QString additionalPrize;
-	TimeId untilDate = 0;
-	bool onlyNewSubscribers = false;
-	bool showWinners = false;
-};
-
-struct InvoicePremiumGiftCodeUsers {
-	std::vector<not_null<UserData*>> users;
-	ChannelData *boostPeer = nullptr;
-};
-
-struct InvoicePremiumGiftCode {
-	std::variant<
-		InvoicePremiumGiftCodeUsers,
-		InvoicePremiumGiftCodeGiveaway> purpose;
-
-	uint64 randomId = 0;
-	QString currency;
-	uint64 amount = 0;
-	QString storeProduct;
-	int storeQuantity = 0;
-	int users = 0;
-	int months = 0;
-};
-
-struct InvoiceId {
-	std::variant<InvoiceMessage, InvoiceSlug, InvoicePremiumGiftCode> value;
 };
 
 [[nodiscard]] not_null<Main::Session*> SessionFromId(const InvoiceId &id);
 
 [[nodiscard]] MTPinputStorePaymentPurpose InvoicePremiumGiftCodeGiveawayToTL(
+	const InvoicePremiumGiftCode &invoice);
+[[nodiscard]] MTPinputStorePaymentPurpose InvoiceCreditsGiveawayToTL(
 	const InvoicePremiumGiftCode &invoice);
 
 class Form final : public base::has_weak_ptr {
@@ -287,9 +347,11 @@ private:
 	void requestReceipt();
 	void processForm(const MTPDpayments_paymentForm &data);
 	void processReceipt(const MTPDpayments_paymentReceipt &data);
+	void processReceipt(const MTPDpayments_paymentReceiptStars &data);
 	void processInvoice(const MTPDinvoice &data);
 	void processDetails(const MTPDpayments_paymentForm &data);
 	void processDetails(const MTPDpayments_paymentReceipt &data);
+	void processDetails(const MTPDpayments_paymentReceiptStars &data);
 	void processSavedInformation(const MTPDpaymentRequestedInfo &data);
 	void processAdditionalPaymentMethods(
 		const QVector<MTPPaymentFormMethod> &list);

@@ -30,7 +30,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/painter.h"
+#include "ui/ui_utility.h"
 #include "history/view/history_view_cursor_state.h"
+#include "history/history.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_menu_icons.h"
 
@@ -331,23 +333,31 @@ void Inner::contextMenuEvent(QContextMenuEvent *e) {
 	if (_selected < 0 || _pressed >= 0) {
 		return;
 	}
-	const auto type = _sendMenuType
-		? _sendMenuType()
-		: SendMenu::Type::Disabled;
+	auto details = _sendMenuDetails
+		? _sendMenuDetails()
+		: SendMenu::Details();
+
+	// inline results don't have effects
+	details.effectAllowed = false;
 
 	_menu = base::make_unique_q<Ui::PopupMenu>(
 		this,
 		st::popupMenuWithIcons);
 
-	const auto send = [=, selected = _selected](Api::SendOptions options) {
+	const auto selected = _selected;
+	const auto send = crl::guard(this, [=](Api::SendOptions options) {
 		selectInlineResult(selected, options, false);
-	};
+	});
+	const auto show = _controller->uiShow();
+
+	// In case we're adding items after FillSendMenu we have
+	// to pass nullptr for showForEffect and attach selector later.
+	// Otherwise added items widths won't be respected in menu geometry.
 	SendMenu::FillSendMenu(
 		_menu,
-		type,
-		SendMenu::DefaultSilentCallback(send),
-		SendMenu::DefaultScheduleCallback(_controller->uiShow(), type, send),
-		SendMenu::DefaultWhenOnlineCallback(send));
+		nullptr, // showForEffect
+		details,
+		SendMenu::DefaultCallback(show, send));
 
 	const auto hideViaActions = [&] {
 		const auto sendPreview = [=, selected = _selected](Api::SendOptions options) {
@@ -379,6 +389,12 @@ void Inner::contextMenuEvent(QContextMenuEvent *e) {
 	} else if (const auto previewPhoto = item->getPreviewPhoto()) {
 		hideViaActions();
 	}
+
+	SendMenu::AttachSendMenuEffect(
+		_menu,
+		show,
+		details,
+		SendMenu::DefaultCallback(show, send));
 
 	if (!_menu->empty()) {
 		_menu->popup(QCursor::pos());
@@ -693,10 +709,13 @@ void Inner::switchPm() {
 	if (!_inlineBot || !_inlineBot->isBot()) {
 		return;
 	} else if (!_switchPmUrl.isEmpty()) {
-		_inlineBot->session().attachWebView().requestSimple(
-			_controller,
-			_inlineBot,
-			{ .url = _switchPmUrl, .fromSwitch = true });
+		const auto bot = _inlineBot;
+		_inlineBot->session().attachWebView().open({
+			.bot = bot,
+			.context = { .controller = _controller },
+			.button = { .url = _switchPmUrl },
+			.source = InlineBots::WebViewSourceSwitch(),
+		});
 	} else {
 		_inlineBot->botInfo->startToken = _switchPmStartToken;
 		_inlineBot->botInfo->inlineReturnTo
@@ -708,8 +727,8 @@ void Inner::switchPm() {
 	}
 }
 
-void Inner::setSendMenuType(Fn<SendMenu::Type()> &&callback) {
-	_sendMenuType = std::move(callback);
+void Inner::setSendMenuDetails(Fn<SendMenu::Details()> &&callback) {
+	_sendMenuDetails = std::move(callback);
 }
 
 } // namespace Layout

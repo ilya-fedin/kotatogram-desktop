@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/time_picker_box.h"
 #include "ui/effects/emoji_fly_animation.h"
 #include "ui/text/format_values.h"
+#include "ui/ui_utility.h"
 #include "base/unixtime.h"
 #include "boxes/premium_preview_box.h"
 #include "window/window_session_controller.h"
@@ -229,7 +230,7 @@ void EmojiStatusPanel::create(const Descriptor &descriptor) {
 
 	_panel->selector()->contextMenuRequested(
 	) | rpl::start_with_next([=] {
-		_panel->selector()->showMenuWithType(SendMenu::Type::Scheduled);
+		_panel->selector()->showMenuWithDetails({});
 	}, _panel->lifetime());
 
 	auto statusChosen = _panel->selector()->customEmojiChosen(

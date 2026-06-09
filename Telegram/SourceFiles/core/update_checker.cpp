@@ -246,6 +246,7 @@ QString FindUpdateFile() {
 			"^("
 			"tupdate|"
 			"tx64upd|"
+			"tarm64upd|"
 			"tmacupd|"
 			"tarmacupd|"
 			"tlinuxupd|"

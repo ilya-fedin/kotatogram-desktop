@@ -233,9 +233,10 @@ QString SpecialScanCredentialsKey(FileType type) {
 
 QString ValidateUrl(const QString &url) {
 	const auto result = qthelp::validate_url(url);
-	return result.startsWith("tg://", Qt::CaseInsensitive)
-		? QString()
-		: result;
+	return (result.startsWith("http://", Qt::CaseInsensitive)
+		|| result.startsWith("https://", Qt::CaseInsensitive))
+		? result
+		: QString();
 }
 
 auto ParseConfig(const QByteArray &json) {
@@ -2261,8 +2262,10 @@ void FormController::requestPhoneCall(not_null<Value*> value) {
 	value->verification.call->setStatus(
 		{ Ui::SentCodeCall::State::Calling, 0 });
 	_api.request(MTPauth_ResendCode(
+		MTP_flags(0),
 		MTP_string(getPhoneFromValue(value)),
-		MTP_string(value->verification.phoneCodeHash)
+		MTP_string(value->verification.phoneCodeHash),
+		MTPstring() // reason
 	)).done([=] {
 		value->verification.call->callDone();
 	}).send();

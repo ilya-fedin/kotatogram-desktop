@@ -7,11 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "history/view/controls/history_view_compose_media_edit_manager.h"
 #include "ui/layers/box_content.h"
 #include "ui/chat/attach/attach_prepare.h"
 
 namespace ChatHelpers {
 class TabbedPanel;
+class FieldAutocomplete;
 } // namespace ChatHelpers
 
 namespace Window {
@@ -35,12 +37,10 @@ public:
 	EditCaptionBox(
 		QWidget*,
 		not_null<Window::SessionController*> controller,
-		not_null<HistoryItem*> item);
-	EditCaptionBox(
-		QWidget*,
-		not_null<Window::SessionController*> controller,
 		not_null<HistoryItem*> item,
 		TextWithTags &&text,
+		bool spoilered,
+		bool invertCaption,
 		Ui::PreparedList &&list,
 		Fn<void()> saved);
 	~EditCaptionBox();
@@ -49,19 +49,27 @@ public:
 		not_null<Window::SessionController*> controller,
 		FullMsgId itemId,
 		TextWithTags text,
+		bool spoilered,
+		bool invertCaption,
 		Fn<void()> saved);
 	static void StartMediaReplace(
 		not_null<Window::SessionController*> controller,
 		FullMsgId itemId,
 		Ui::PreparedList &&list,
 		TextWithTags text,
+		bool spoilered,
+		bool invertCaption,
 		Fn<void()> saved);
 	static void StartPhotoEdit(
 		not_null<Window::SessionController*> controller,
 		std::shared_ptr<Data::PhotoMedia> media,
 		FullMsgId itemId,
 		TextWithTags text,
+		bool spoilered,
+		bool invertCaption,
 		Fn<void()> saved);
+
+	void showFinished() override;
 
 protected:
 	void prepare() override;
@@ -76,6 +84,7 @@ private:
 	void setupEditEventHandler();
 	void setupPhotoEditorEventHandler();
 	void setupField();
+	void setupFieldAutocomplete();
 	void setupControls();
 	void setInitialText();
 
@@ -110,8 +119,9 @@ private:
 	const base::unique_qptr<Ui::InputField> _field;
 	const base::unique_qptr<Ui::EmojiButton> _emojiToggle;
 
+	std::unique_ptr<ChatHelpers::FieldAutocomplete> _autocomplete;
+
 	base::unique_qptr<Ui::AbstractSinglePreview> _content;
-	Fn<bool()> _previewHasSpoiler;
 	base::unique_qptr<ChatHelpers::TabbedPanel> _emojiPanel;
 	base::unique_qptr<QObject> _emojiFilter;
 
@@ -122,6 +132,7 @@ private:
 	std::shared_ptr<Data::PhotoMedia> _photoMedia;
 
 	Ui::PreparedList _preparedList;
+	HistoryView::MediaEditManager _mediaEditManager;
 
 	mtpRequestId _saveRequestId = 0;
 

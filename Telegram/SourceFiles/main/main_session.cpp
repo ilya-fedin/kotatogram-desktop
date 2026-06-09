@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/stickers_emoji_pack.h"
 #include "chat_helpers/stickers_dice_pack.h"
 #include "chat_helpers/stickers_gift_box_pack.h"
+#include "history/view/reactions/history_view_reactions_strip.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "inline_bots/bot_attach_web_view.h"
@@ -28,6 +29,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/file_upload.h"
 #include "storage/storage_account.h"
 #include "storage/storage_facade.h"
+#include "data/components/credits.h"
+#include "data/components/factchecks.h"
+#include "data/components/location_pickers.h"
 #include "data/components/recent_peers.h"
 #include "data/components/scheduled_messages.h"
 #include "data/components/sponsored_messages.h"
@@ -71,10 +75,14 @@ constexpr auto kTmpPasswordReserveTime = TimeId(10);
 		if (domain.startsWith(prefix, Qt::CaseInsensitive)) {
 			return domain.endsWith('/')
 				? domain
-				: MTP::ConfigFields().internalLinksDomain;
+				: MTP::ConfigFields(
+					session->mtp().environment()
+				).internalLinksDomain;
 		}
 	}
-	return MTP::ConfigFields().internalLinksDomain;
+	return MTP::ConfigFields(
+		session->mtp().environment()
+	).internalLinksDomain;
 }
 
 } // namespace
@@ -103,7 +111,13 @@ Session::Session(
 , _recentPeers(std::make_unique<Data::RecentPeers>(this))
 , _scheduledMessages(std::make_unique<Data::ScheduledMessages>(this))
 , _sponsoredMessages(std::make_unique<Data::SponsoredMessages>(this))
-, _topPeers(std::make_unique<Data::TopPeers>(this))
+, _topPeers(std::make_unique<Data::TopPeers>(this, Data::TopPeerType::Chat))
+, _topBotApps(
+	std::make_unique<Data::TopPeers>(this, Data::TopPeerType::BotApp))
+, _factchecks(std::make_unique<Data::Factchecks>(this))
+, _locationPickers(std::make_unique<Data::LocationPickers>())
+, _credits(std::make_unique<Data::Credits>(this))
+, _cachedReactionIconFactory(std::make_unique<ReactionIconFactory>())
 , _supportHelper(Support::Helper::Create(this))
 , _saveSettingsTimer([=] { saveSettings(); }) {
 	Expects(_settings != nullptr);
@@ -485,7 +499,8 @@ Window::SessionController *Session::tryResolveWindow(
 	if (forPeer) {
 		auto primary = (Window::SessionController*)nullptr;
 		for (const auto &window : _windows) {
-			if (window->singlePeer() == forPeer) {
+			const auto thread = window->windowId().thread;
+			if (thread && thread->peer() == forPeer) {
 				return window;
 			} else if (window->isPrimary()) {
 				primary = window;

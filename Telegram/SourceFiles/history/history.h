@@ -226,6 +226,7 @@ public:
 	void outboxRead(MsgId upTo);
 	void outboxRead(not_null<const HistoryItem*> wasRead);
 	[[nodiscard]] MsgId loadAroundId() const;
+	[[nodiscard]] bool inboxReadTillKnown() const;
 	[[nodiscard]] MsgId inboxReadTillId() const;
 	[[nodiscard]] MsgId outboxReadTillId() const;
 

@@ -47,6 +47,10 @@ struct ChosenRenderer;
 enum class Backend;
 } // namespace Ui::GL
 
+namespace Ui::Menu {
+struct MenuCallback;
+} // namespace Ui::Menu
+
 namespace Platform {
 class OverlayWidgetHelper;
 } // namespace Platform
@@ -54,10 +58,6 @@ class OverlayWidgetHelper;
 namespace Window::Theme {
 struct Preview;
 } // namespace Window::Theme
-
-namespace HistoryView::Reactions {
-class CachedIconFactory;
-} // namespace HistoryView::Reactions
 
 namespace Media::Player {
 struct TrackState;
@@ -141,6 +141,7 @@ private:
 	class Renderer;
 	class RendererSW;
 	class RendererGL;
+	class SponsoredButton;
 
 	// If changing, see paintControls()!
 	enum class Over {
@@ -149,6 +150,7 @@ private:
 		Right,
 		LeftStories,
 		RightStories,
+		SponsoredButton,
 		Header,
 		Name,
 		Date,
@@ -251,8 +253,6 @@ private:
 	std::shared_ptr<ChatHelpers::Show> storiesShow() override;
 	auto storiesStickerOrEmojiChosen()
 		-> rpl::producer<ChatHelpers::FileChosen> override;
-	auto storiesCachedReactionIconFactory()
-		-> HistoryView::Reactions::CachedIconFactory & override;
 	void storiesRedisplay(not_null<Data::Story*> story) override;
 	void storiesJumpTo(
 		not_null<Main::Session*> session,
@@ -309,7 +309,7 @@ private:
 	bool moveToNext(int delta);
 	void preloadData(int delta);
 
-	void handleScreenChanged(QScreen *screen);
+	void handleScreenChanged(not_null<QScreen*> screen);
 
 	[[nodiscard]] bool computeSaveButtonVisible() const;
 	void checkForSaveLoaded();
@@ -370,11 +370,7 @@ private:
 	void updateControlsGeometry();
 	void updateNavigationControlsGeometry();
 
-	using MenuCallback = Fn<void(
-		const QString &,
-		Fn<void()>,
-		const style::icon *)>;
-	void fillContextMenuActions(const MenuCallback &addAction);
+	void fillContextMenuActions(const Ui::Menu::MenuCallback &addAction);
 
 	void resizeCenteredControls();
 	void resizeContentByScreenSize();
@@ -416,6 +412,10 @@ private:
 	void initThemePreview();
 	void destroyThemePreview();
 	void updateThemePreviewGeometry();
+
+	void initSponsoredButton();
+	void refreshSponsoredButtonGeometry();
+	void refreshSponsoredButtonWidth();
 
 	void documentUpdated(not_null<DocumentData*> document);
 	void changingMsgId(FullMsgId newId, MsgId oldId);
@@ -629,8 +629,6 @@ private:
 	bool _showAsPip = false;
 
 	std::unique_ptr<Stories::View> _stories;
-	using ReactionIconFactory = HistoryView::Reactions::CachedIconFactory;
-	std::unique_ptr<ReactionIconFactory> _cachedReactionIconFactory;
 	std::shared_ptr<Show> _cachedShow;
 	rpl::event_stream<> _storiesChanged;
 	Main::Session *_storiesSession = nullptr;
@@ -700,6 +698,8 @@ private:
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	object_ptr<Ui::DropdownMenu> _dropdown;
 	base::Timer _dropdownShowTimer;
+
+	base::unique_qptr<SponsoredButton> _sponsoredButton;
 
 	bool _receiveMouse = true;
 	bool _processingKeyPress = false;

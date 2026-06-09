@@ -21,7 +21,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 class History;
 class DocumentData;
-class FieldAutocomplete;
 class Image;
 
 namespace style {
@@ -29,7 +28,7 @@ struct ComposeControls;
 } // namespace style
 
 namespace SendMenu {
-enum class Type;
+struct Details;
 } // namespace SendMenu
 
 namespace ChatHelpers {
@@ -39,6 +38,7 @@ struct FileChosen;
 struct PhotoChosen;
 class Show;
 enum class PauseReason;
+class FieldAutocomplete;
 } // namespace ChatHelpers
 
 namespace Data {
@@ -67,6 +67,10 @@ class SilentToggle;
 class DropdownMenu;
 struct PreparedList;
 } // namespace Ui
+
+namespace Ui::Emoji {
+class SuggestionsController;
+} // namespace Ui::Emoji
 
 namespace Main {
 class Session;
@@ -104,7 +108,7 @@ struct ComposeControlsDescriptor {
 	std::shared_ptr<ChatHelpers::Show> show;
 	Fn<void(not_null<DocumentData*>)> unavailableEmojiPasted;
 	ComposeControlsMode mode = ComposeControlsMode::Normal;
-	SendMenu::Type sendMenuType = {};
+	Fn<SendMenu::Details()> sendMenuDetails = nullptr;
 	Window::SessionController *regularWindow = nullptr;
 	rpl::producer<ChatHelpers::FileChosen> stickerOrEmojiChosen;
 	rpl::producer<QString> customPlaceholder;
@@ -259,6 +263,7 @@ private:
 
 	void init();
 	void initField();
+	void initFieldAutocomplete();
 	void initTabbedSelector();
 	void initSendButton();
 	void initSendAsButton(not_null<PeerData*> peer);
@@ -266,7 +271,6 @@ private:
 	void initForwardProcess();
 	void initWriteRestriction();
 	void initVoiceRecordBar();
-	void initAutocomplete();
 	void initKeyHandler();
 	void updateSubmitSettings();
 	void updateSendButtonType();
@@ -282,22 +286,20 @@ private:
 	void paintBackground(QPainter &p, QRect full, QRect clip);
 
 	[[nodiscard]] auto computeSendButtonType() const;
-	[[nodiscard]] SendMenu::Type sendMenuType() const;
-	[[nodiscard]] SendMenu::Type sendButtonMenuType() const;
+	[[nodiscard]] SendMenu::Details sendMenuDetails() const;
+	[[nodiscard]] SendMenu::Details saveMenuDetails() const;
+	[[nodiscard]] SendMenu::Details sendButtonMenuDetails() const;
 
 	[[nodiscard]] auto sendContentRequests(
 		SendRequestType requestType = SendRequestType::Text) const;
 
 	void orderControls();
-	void checkAutocomplete();
-	bool updateStickersByEmoji();
 	void updateFieldPlaceholder();
 	void updateSilentBroadcast();
 	void editMessage(not_null<HistoryItem*> item);
 
 	void escape();
 	void fieldChanged();
-	void fieldTabbed();
 	void toggleTabbedSelectorMode();
 	void createTabbedPanel();
 	void setTabbedPanel(std::unique_ptr<ChatHelpers::TabbedPanel> panel);
@@ -390,13 +392,14 @@ private:
 	std::unique_ptr<InlineBots::Layout::Widget> _inlineResults;
 	std::unique_ptr<ChatHelpers::TabbedPanel> _tabbedPanel;
 	std::unique_ptr<Ui::DropdownMenu> _attachBotsMenu;
-	std::unique_ptr<FieldAutocomplete> _autocomplete;
+	std::unique_ptr<ChatHelpers::FieldAutocomplete> _autocomplete;
+	std::unique_ptr<Ui::Emoji::SuggestionsController> _emojiSuggestions;
 
 	friend class FieldHeader;
 	const std::unique_ptr<FieldHeader> _header;
 	const std::unique_ptr<Controls::VoiceRecordBar> _voiceRecordBar;
 
-	const SendMenu::Type _sendMenuType;
+	const Fn<SendMenu::Details()> _sendMenuDetails;
 	const Fn<void(not_null<DocumentData*>)> _unavailableEmojiPasted;
 
 	rpl::event_stream<Api::SendOptions> _sendCustomRequests;
@@ -439,8 +442,6 @@ private:
 	bool _canReplaceMedia = false;
 
 	std::unique_ptr<Controls::WebpageProcessor> _preview;
-
-	Fn<void()> _raiseEmojiSuggestions;
 
 	rpl::lifetime _historyLifetime;
 	rpl::lifetime _uploaderSubscriptions;

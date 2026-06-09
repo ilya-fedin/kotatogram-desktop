@@ -139,9 +139,6 @@ QSize UnwrappedMedia::countCurrentSize(int newWidth) {
 		if (via) {
 			via->resize(availw);
 		}
-		if (reply) {
-			[[maybe_unused]] int height = reply->resizeToWidth(availw);
-		}
 	}
 	return { newWidth, newHeight };
 }
@@ -661,6 +658,7 @@ bool UnwrappedMedia::needInfoDisplay() const {
 		|| _parent->isUnderCursor()
 		|| _parent->rightActionSize()
 		|| _parent->isLastAndSelfMessage()
+		|| (_parent->delegate()->elementContext() == Context::ChatPreview)
 		|| (_parent->hasRightLayout()
 			&& _content->alwaysShowOutTimestamp());
 }

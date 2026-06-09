@@ -94,9 +94,12 @@ public:
 
 	[[nodiscard]] QString peerUserpicEmojiData(
 		not_null<PeerData*> peer,
-		QMargins padding = {});
+		QMargins padding = {},
+		bool respectSavedRepliesEtc = false);
 
 	[[nodiscard]] uint64 coloredSetId() const;
+
+	[[nodiscard]] TextWithEntities creditsEmoji(QMargins padding = {});
 
 private:
 	static constexpr auto kSizeCount = int(SizeTag::kCount);

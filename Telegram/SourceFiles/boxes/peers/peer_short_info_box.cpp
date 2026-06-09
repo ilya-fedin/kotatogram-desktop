@@ -398,7 +398,7 @@ void PeerShortInfoCover::paintRadial(QPainter &p) {
 QImage PeerShortInfoCover::currentVideoFrame() const {
 	const auto size = QSize(_st.size, _st.size);
 	const auto request = Media::Streaming::FrameRequest{
-		.resize = size * style::DevicePixelRatio(),
+		.resize = size,
 		.outer = size,
 	};
 	return (_videoInstance
@@ -721,6 +721,7 @@ void PeerShortInfoBox::prepare() {
 	_roundedTop.setDevicePixelRatio(style::DevicePixelRatio());
 	refreshRoundedTopImage(getDelegate()->style().bg->c);
 
+	setCustomCornersFilling(RectPart::FullTop);
 	setDimensionsToContent(st::shortInfoWidth, _rows);
 }
 
@@ -793,10 +794,6 @@ void PeerShortInfoBox::prepareRows() {
 		birthdayLabel(),
 		birthdayValue() | Ui::Text::ToWithEntities(),
 		tr::lng_mediaview_copy(tr::now));
-}
-
-RectParts PeerShortInfoBox::customCornersFilling() {
-	return RectPart::FullTop;
 }
 
 void PeerShortInfoBox::resizeEvent(QResizeEvent *e) {

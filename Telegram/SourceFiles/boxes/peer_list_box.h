@@ -200,6 +200,9 @@ public:
 	void setIsRepliesMessagesChat(bool isRepliesMessagesChat) {
 		_isRepliesMessagesChat = isRepliesMessagesChat;
 	}
+	void setIsVerifyCodesChat(bool isVerifyCodesChat) {
+		_isVerifyCodesChat = isVerifyCodesChat;
+	}
 
 	template <typename UpdateCallback>
 	void setChecked(
@@ -251,6 +254,10 @@ public:
 		return _nameFirstLetters;
 	}
 
+	void setSkipPeerBadge(bool skip) {
+		_skipPeerBadge = skip;
+	}
+
 	virtual void lazyInitialize(const style::PeerListItem &st);
 	virtual void paintStatusText(
 		Painter &p,
@@ -288,7 +295,7 @@ private:
 	std::unique_ptr<Ui::RoundImageCheckbox> _checkbox;
 	Ui::Text::String _name;
 	Ui::Text::String _status;
-	Ui::PeerBadge _bagde;
+	Ui::PeerBadge _badge;
 	StatusType _statusType = StatusType::Online;
 	crl::time _statusValidTill = 0;
 	base::flat_set<QChar> _nameFirstLetters;
@@ -299,6 +306,8 @@ private:
 	bool _initialized : 1 = false;
 	bool _isSearchResult : 1 = false;
 	bool _isRepliesMessagesChat : 1 = false;
+	bool _isVerifyCodesChat : 1 = false;
+	bool _skipPeerBadge : 1 = false;
 
 };
 
@@ -347,6 +356,9 @@ public:
 	virtual void peerListSortRows(Fn<bool(const PeerListRow &a, const PeerListRow &b)> compare) = 0;
 	virtual int peerListPartitionRows(Fn<bool(const PeerListRow &a)> border) = 0;
 	virtual std::shared_ptr<Main::SessionShow> peerListUiShow() = 0;
+
+	virtual void peerListPressLeftToContextMenu(bool shown) = 0;
+	virtual bool peerListTrackRowPressFromGlobal(QPoint globalPosition) = 0;
 
 	template <typename PeerDataRange>
 	void peerListAddSelectedPeers(PeerDataRange &&range) {
@@ -476,6 +488,15 @@ public:
 		if (element == 1) {
 			rowRightActionClicked(row);
 		}
+	}
+
+	virtual bool rowTrackPress(not_null<PeerListRow*> row) {
+		return false;
+	}
+	virtual void rowTrackPressCancel() {
+	}
+	virtual bool rowTrackPressSkipMouseSelection() {
+		return false;
 	}
 
 	virtual void loadMoreRows() {
@@ -655,6 +676,8 @@ public:
 	void refreshRows();
 
 	void mouseLeftGeometry();
+	void pressLeftToContextMenu(bool shown);
+	bool trackRowPressFromGlobal(QPoint globalPosition);
 
 	void setSearchMode(PeerListSearchMode mode);
 	void changeCheckState(
@@ -829,6 +852,7 @@ private:
 	bool _mouseSelection = false;
 	std::optional<QPoint> _lastMousePosition;
 	Qt::MouseButton _pressButton = Qt::LeftButton;
+	std::optional<QPoint> _trackPressStart;
 
 	rpl::event_stream<Ui::ScrollToRequest> _scrollToRequests;
 
@@ -991,6 +1015,13 @@ public:
 		not_null<PeerListRow*> row,
 		bool highlightRow,
 		Fn<void(not_null<Ui::PopupMenu*>)> destroyed = nullptr) override;
+
+	void peerListPressLeftToContextMenu(bool shown) override {
+		_content->pressLeftToContextMenu(shown);
+	}
+	bool peerListTrackRowPressFromGlobal(QPoint globalPosition) override {
+		return _content->trackRowPressFromGlobal(globalPosition);
+	}
 
 protected:
 	not_null<PeerListContent*> content() const {

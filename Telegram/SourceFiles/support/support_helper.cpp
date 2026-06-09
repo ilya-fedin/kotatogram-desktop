@@ -86,7 +86,7 @@ EditInfoBox::EditInfoBox(
 	_field->setSubmitSettings(
 		Core::App().settings().sendSubmitWay());
 	_field->setInstantReplaces(Core::App().settings().instantReplacesValue());
-	_field->setMarkdownReplacesEnabled(rpl::single(true));
+	_field->setMarkdownReplacesEnabled(true);
 	_field->setEditLinkCallback(
 		DefaultEditLinkCallback(controller->uiShow(), _field));
 }

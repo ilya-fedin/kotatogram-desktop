@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_forum_topic.h"
 #include "data/data_session.h"
 #include "data/stickers/data_custom_emoji.h"
+#include "base/event_filter.h"
 #include "base/random.h"
 #include "base/qt_signal_producer.h"
 #include "chat_helpers/emoji_list_widget.h"
@@ -42,16 +43,14 @@ namespace {
 
 constexpr auto kDefaultIconId = DocumentId(0x7FFF'FFFF'FFFF'FFFFULL);
 
-struct DefaultIcon {
-	QString title;
-	int32 colorId = 0;
-};
+using DefaultIcon = Data::TopicIconDescriptor;
 
 class DefaultIconEmoji final : public Ui::Text::CustomEmoji {
 public:
 	DefaultIconEmoji(
 		rpl::producer<DefaultIcon> value,
-		Fn<void()> repaint);
+		Fn<void()> repaint,
+		Data::CustomEmojiSizeTag tag);
 
 	int width() override;
 	QString entityData() override;
@@ -64,14 +63,17 @@ public:
 private:
 	DefaultIcon _icon = {};
 	QImage _image;
+	Data::CustomEmojiSizeTag _tag = {};
 
 	rpl::lifetime _lifetime;
 
 };
 
 DefaultIconEmoji::DefaultIconEmoji(
-		rpl::producer<DefaultIcon> value,
-		Fn<void()> repaint) {
+	rpl::producer<DefaultIcon> value,
+	Fn<void()> repaint,
+	Data::CustomEmojiSizeTag tag)
+: _tag(tag) {
 	std::move(value) | rpl::start_with_next([=](DefaultIcon value) {
 		_icon = value;
 		_image = QImage();
@@ -88,15 +90,22 @@ QString DefaultIconEmoji::entityData() {
 }
 
 void DefaultIconEmoji::paint(QPainter &p, const Context &context) {
+	const auto &st = (_tag == Data::CustomEmojiSizeTag::Normal)
+		? st::normalForumTopicIcon
+		: st::defaultForumTopicIcon;
 	if (_image.isNull()) {
-		_image = Data::ForumTopicIconFrame(
-			_icon.colorId,
-			_icon.title,
-			st::defaultForumTopicIcon);
+		_image = Data::IsForumGeneralIconTitle(_icon.title)
+			? Data::ForumTopicGeneralIconFrame(
+				st.size,
+				Data::ParseForumGeneralIconColor(_icon.colorId))
+			: Data::ForumTopicIconFrame(_icon.colorId, _icon.title, st);
 	}
-	const auto esize = Ui::Emoji::GetSizeLarge() / style::DevicePixelRatio();
+	const auto full = (_tag == Data::CustomEmojiSizeTag::Normal)
+		? Ui::Emoji::GetSizeNormal()
+		: Ui::Emoji::GetSizeLarge();
+	const auto esize = full / style::DevicePixelRatio();
 	const auto customSize = Ui::Text::AdjustCustomEmojiSize(esize);
-	const auto skip = (customSize - st::defaultForumTopicIcon.size) / 2;
+	const auto skip = (customSize - st.size) / 2;
 	p.drawImage(context.position + QPoint(skip, skip), _image);
 }
 
@@ -212,7 +221,7 @@ bool DefaultIconEmoji::readyInDefaultState() {
 	) | rpl::start_with_next([=] {
 		state->frame = Data::ForumTopicGeneralIconFrame(
 			st::largeForumTopicIcon.size,
-			st::windowSubTextFg);
+			st::windowSubTextFg->c);
 		result->update();
 	}, result->lifetime());
 
@@ -261,7 +270,8 @@ struct IconSelector {
 		if (id == kDefaultIconId) {
 			return std::make_unique<DefaultIconEmoji>(
 				rpl::duplicate(defaultIcon),
-				repaint);
+				std::move(repaint),
+				tag);
 		}
 		return manager->create(id, std::move(repaint), tag);
 	};
@@ -473,6 +483,9 @@ void EditForumTopicBox(
 			state->defaultIcon.current().colorId,
 		};
 	}, title->lifetime());
+	title->submits() | rpl::start_with_next([box] {
+		box->triggerButton(0);
+	}, title->lifetime());
 
 	if (!topic || !topic->isGeneral()) {
 		Ui::AddDividerText(top, tr::lng_forum_choose_title_and_icon());
@@ -571,4 +584,14 @@ void EditForumTopicBox(
 	box->addButton(tr::lng_cancel(), [=] {
 		box->closeBox();
 	});
+}
+
+std::unique_ptr<Ui::Text::CustomEmoji> MakeTopicIconEmoji(
+		Data::TopicIconDescriptor descriptor,
+		Fn<void()> repaint,
+		Data::CustomEmojiSizeTag tag) {
+	return std::make_unique<DefaultIconEmoji>(
+		rpl::single(descriptor),
+		std::move(repaint),
+		tag);
 }

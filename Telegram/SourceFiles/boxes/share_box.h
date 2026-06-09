@@ -24,7 +24,7 @@ struct PeerList;
 } // namespace style
 
 namespace SendMenu {
-enum class Type;
+struct Details;
 } // namespace SendMenu
 
 namespace Window {
@@ -61,13 +61,11 @@ class SlideWrap;
 class PopupMenu;
 } // namespace Ui
 
-QString AppendShareGameScoreUrl(
-	not_null<Main::Session*> session,
-	const QString &url,
-	const FullMsgId &fullId);
-void ShareGameScoreByHash(
-	not_null<Window::SessionController*> controller,
-	const QString &hash);
+class ShareBox;
+
+void FastShareMessage(
+	std::shared_ptr<Main::SessionShow> show,
+	not_null<HistoryItem*> item);
 void FastShareMessage(
 	not_null<Window::SessionController*> controller,
 	not_null<HistoryItem*> item);
@@ -140,14 +138,11 @@ private:
 	void scrollAnimationCallback();
 
 	void submit(Api::SendOptions options);
-	void submitSilent();
-	void submitScheduled();
-	void submitWhenOnline();
 	void copyLink() const;
 	void goToChat(not_null<Data::Thread*> thread);
 	bool searchByUsername(bool useCache = false);
 
-	SendMenu::Type sendMenuType() const;
+	[[nodiscard]] SendMenu::Details sendMenuDetails() const;
 
 	void scrollTo(Ui::ScrollToRequest request);
 	void needSearchByUsername();
