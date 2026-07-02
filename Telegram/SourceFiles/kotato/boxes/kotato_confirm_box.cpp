@@ -164,7 +164,7 @@ void ConfirmBox::prepare() {
 			[=] { _cancelled = true; closeBox(); });
 	}
 
-	boxClosing() | rpl::start_with_next([=] {
+	boxClosing() | rpl::on_next([=] {
 		if (!_confirmed && (!_strictCancel || _cancelled)) {
 			if (auto callback = std::move(_cancelledCallback)) {
 				callback();

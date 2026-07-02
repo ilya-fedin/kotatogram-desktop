@@ -7,10 +7,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "api/api_chat_filters_remove_manager.h"
 #include "base/timer.h"
 #include "ui/effects/animations.h"
 #include "ui/widgets/side_bar_button.h"
 #include "ui/widgets/scroll_area.h"
+
+namespace Data {
+struct ChatFilterTitle;
+} // namespace Data
 
 namespace Ui {
 class VerticalLayout;
@@ -45,18 +50,16 @@ private:
 	[[nodiscard]] base::unique_qptr<Ui::SideBarButton> prepareButton(
 		not_null<Ui::VerticalLayout*> container,
 		FilterId id,
-		const QString &title,
+		Data::ChatFilterTitle title,
 		Ui::FilterIcon icon,
 		bool toBeginning = false);
 	void setupMainMenuIcon();
 	void showMenu(QPoint position, FilterId id);
 	void showEditMenu(QPoint position);
 	void setDefaultFilter(FilterId id);
-	void showEditBox(FilterId id);
-	void showRemoveBox(FilterId id);
-	void remove(FilterId id, std::vector<not_null<PeerData*>> leave = {});
 	void scrollToButton(not_null<Ui::RpWidget*> widget);
 	void openFiltersSettings();
+	void setupDragAndDrop();
 
 	const not_null<SessionController*> _session;
 	const not_null<Ui::RpWidget*> _parent;
@@ -74,8 +77,7 @@ private:
 	bool _ignoreRefresh = false;
 	bool _waitingSuggested = false;
 
-	FilterId _removingId = 0;
-	mtpRequestId _removingRequestId = 0;
+	Api::RemoveComplexChatFilter _removeApi;
 
 	base::unique_qptr<Ui::PopupMenu> _popupMenu;
 	struct {

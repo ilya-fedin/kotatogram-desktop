@@ -7,10 +7,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+namespace ChatHelpers {
+class Show;
+} // namespace ChatHelpers
+
 namespace Ui {
 struct PreparedList;
 struct PreparedFile;
+struct PreparedBundle;
 } // namespace Ui
+
+namespace Window {
+class SessionNavigation;
+} // namespace Window
 
 enum class ChatAdminRight {
 	ChangeInfo = (1 << 0),
@@ -28,6 +37,9 @@ enum class ChatAdminRight {
 	PostStories = (1 << 14),
 	EditStories = (1 << 15),
 	DeleteStories = (1 << 16),
+	ManageDirect = (1 << 17),
+	ManageRanks = (1 << 18),
+	ProcessJoinRequests = (1 << 19),
 };
 inline constexpr bool is_flag_type(ChatAdminRight) { return true; }
 using ChatAdminRights = base::flags<ChatAdminRight>;
@@ -54,6 +66,8 @@ enum class ChatRestriction {
 	AddParticipants = (1 << 15),
 	PinMessages = (1 << 17),
 	CreateTopics = (1 << 18),
+	EditRank = (1 << 26),
+	SendReactions = (1 << 27),
 };
 inline constexpr bool is_flag_type(ChatRestriction) { return true; }
 using ChatRestrictions = base::flags<ChatRestriction>;
@@ -67,6 +81,8 @@ struct ChatAdminRightsInfo {
 	ChatAdminRights flags;
 };
 
+[[nodiscard]] MTPChatAdminRights AdminRightsToMTP(ChatAdminRightsInfo info);
+
 struct ChatRestrictionsInfo {
 	ChatRestrictionsInfo() = default;
 	ChatRestrictionsInfo(ChatRestrictions flags, TimeId until)
@@ -79,6 +95,9 @@ struct ChatRestrictionsInfo {
 	TimeId until = 0;
 };
 
+[[nodiscard]] MTPChatBannedRights RestrictionsToMTP(
+	ChatRestrictionsInfo info);
+
 namespace Data {
 
 class Thread;
@@ -87,10 +106,12 @@ struct AdminRightsSetOptions {
 	bool isGroup : 1 = false;
 	bool isForum : 1 = false;
 	bool anyoneCanAddMembers : 1 = false;
+	bool canProcessJoinRequests : 1 = false;
 };
 
 struct RestrictionsSetOptions {
 	bool isForum = false;
+	bool isUserSpecific = false;
 };
 
 [[nodiscard]] std::vector<ChatRestrictions> ListOfRestrictions(
@@ -175,18 +196,83 @@ struct RestrictionsSetOptions {
 	return CanSendAnyOf(peer, AllSendRestrictions(), forbidInForums);
 }
 
-[[nodiscard]] std::optional<QString> RestrictionError(
+struct SendError {
+	SendError(QString text = QString()) : text(std::move(text)) {
+	}
+
+	struct Args {
+		QString text;
+		int boostsToLift = 0;
+		bool monoforumAdmin = false;
+		bool premiumToLift = false;
+		bool frozen = false;
+	};
+	SendError(Args &&args)
+	: text(std::move(args.text))
+	, boostsToLift(args.boostsToLift)
+	, monoforumAdmin(args.monoforumAdmin)
+	, premiumToLift(args.premiumToLift)
+	, frozen(args.frozen) {
+	}
+
+	QString text;
+	int boostsToLift = 0;
+	bool monoforumAdmin = false;
+	bool premiumToLift = false;
+	bool frozen = false;
+
+	[[nodiscard]] SendError value_or(SendError other) const {
+		return *this ? *this : other;
+	}
+
+	explicit operator bool() const {
+		return monoforumAdmin || !text.isEmpty();
+	}
+	[[nodiscard]] bool has_value() const {
+		return !text.isEmpty();
+	}
+	[[nodiscard]] const QString &operator*() const {
+		return text;
+	}
+};
+
+struct SendErrorWithThread {
+	SendError error;
+	Thread *thread = nullptr;
+};
+
+[[nodiscard]] SendError RestrictionError(
 	not_null<PeerData*> peer,
 	ChatRestriction restriction);
-[[nodiscard]] std::optional<QString> AnyFileRestrictionError(
-	not_null<PeerData*> peer);
-[[nodiscard]] std::optional<QString> FileRestrictionError(
+[[nodiscard]] SendError AnyFileRestrictionError(not_null<PeerData*> peer);
+[[nodiscard]] SendError FileRestrictionError(
 	not_null<PeerData*> peer,
 	const Ui::PreparedList &list,
 	std::optional<bool> compress);
-[[nodiscard]] std::optional<QString> FileRestrictionError(
+[[nodiscard]] SendError FileRestrictionError(
 	not_null<PeerData*> peer,
 	const Ui::PreparedFile &file,
 	std::optional<bool> compress);
+
+void ShowSendErrorToast(
+	not_null<Window::SessionNavigation*> navigation,
+	not_null<PeerData*> peer,
+	SendError error);
+void ShowSendErrorToast(
+	std::shared_ptr<ChatHelpers::Show> show,
+	not_null<PeerData*> peer,
+	SendError error);
+
+bool ShowSendError(
+	std::shared_ptr<ChatHelpers::Show> show,
+	not_null<PeerData*> peer,
+	const Ui::PreparedList &list,
+	std::optional<bool> compress,
+	bool ignoreSlowmodeLeft = false);
+bool ShowSendError(
+	std::shared_ptr<ChatHelpers::Show> show,
+	not_null<PeerData*> peer,
+	const Ui::PreparedBundle &bundle,
+	bool ignoreSlowmodeLeft = false);
 
 } // namespace Data

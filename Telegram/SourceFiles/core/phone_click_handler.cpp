@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "core/phone_click_handler.h"
 
+#include "boxes/add_contact_box.h"
 #include "core/click_handler_types.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -38,8 +39,8 @@ namespace {
 class ResolvePhoneAction final : public Ui::Menu::ItemBase {
 public:
 	ResolvePhoneAction(
-		not_null<Ui::RpWidget*> parent,
-		const style::Menu &st,
+		not_null<Ui::Menu::Menu*> parent,
+		const style::PopupMenu &st,
 		const QString &phone,
 		not_null<Window::SessionController*> controller);
 
@@ -47,6 +48,9 @@ public:
 	not_null<QAction*> action() const override;
 
 	void handleKeyPress(not_null<QKeyEvent*> e) override;
+
+	[[nodiscard]] QString firstName() const;
+	[[nodiscard]] QString lastName() const;
 
 protected:
 	QPoint prepareRippleStartPosition() const override;
@@ -75,19 +79,19 @@ private:
 };
 
 ResolvePhoneAction::ResolvePhoneAction(
-	not_null<Ui::RpWidget*> parent,
-	const style::Menu &st,
+	not_null<Ui::Menu::Menu*> parent,
+	const style::PopupMenu &st,
 	const QString &phone,
 	not_null<Window::SessionController*> controller)
-: ItemBase(parent, st)
-, _dummyAction(new QAction(parent))
-, _st(st)
+: ItemBase(parent, st.menu)
+, _dummyAction(Ui::CreateChild<QAction>(parent))
+, _st(st.menu)
 , _api(&controller->session().mtp())
 , _height(rect::m::sum::v(st::groupCallJoinAsPadding)
 	+ st::groupCallJoinAsPhotoSize) {
 	setAcceptBoth(true);
-	initResizeHook(parent->sizeValue());
-	setClickedCallback([=] {
+	fitToMenuWidth();
+	setActionTriggered([=] {
 		if (const auto peer = _peer.current()) {
 			controller->showPeerInfo(peer);
 		}
@@ -121,13 +125,25 @@ ResolvePhoneAction::ResolvePhoneAction(
 	}
 
 	paintRequest(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		Painter p(this);
 		paint(p);
 	}, lifetime());
 
 	enableMouseSelecting();
 	prepare();
+}
+
+QString ResolvePhoneAction::firstName() const {
+	const auto peer = _peer.current();
+	const auto user = peer ? peer->asUser() : nullptr;
+	return user ? user->firstName : QString();
+}
+
+QString ResolvePhoneAction::lastName() const {
+	const auto peer = _peer.current();
+	const auto user = peer ? peer->asUser() : nullptr;
+	return user ? user->lastName : QString();
 }
 
 void ResolvePhoneAction::paint(Painter &p) {
@@ -168,10 +184,10 @@ void ResolvePhoneAction::paint(Painter &p) {
 			width());
 	} else {
 		p.setPen(selected ? _st.itemFgShortcutOver : _st.itemFgShortcut);
-		const auto w = width() - padding.left() - padding.right();
+		const auto w = width() - rect::m::sum::h(padding);
 		_below.draw(p, Ui::Text::PaintContext{
 			.position = QPoint(
-				(width() - w) / 2,
+				padding.left(),
 				(height - _below.countHeight(w)) / 2),
 			.outerWidth = w,
 			.availableWidth = w,
@@ -197,7 +213,7 @@ void ResolvePhoneAction::prepare() {
 				? rpl::single(QString())
 				: tr::lng_contacts_loading();
 		}) | rpl::flatten_latest()
-	) | rpl::start_with_next([=](
+	) | rpl::on_next([=](
 			QString text,
 			QString name,
 			QString no,
@@ -275,6 +291,7 @@ PhoneClickHandler::PhoneClickHandler(
 	QString text)
 : _session(session)
 , _text(text) {
+	setProperty(kPhoneNumberLinkProperty, _text);
 }
 
 void PhoneClickHandler::onClick(ClickContext context) const {
@@ -314,14 +331,29 @@ void PhoneClickHandler::onClick(ClickContext context) const {
 			TextForMimeData::Simple(phone.trimmed()));
 	}, &st::menuIconCopy);
 
+	auto resolvePhoneAction = base::make_unique_q<ResolvePhoneAction>(
+		menu->menu(),
+		menu->st(),
+		phone,
+		controller);
+
+	if (Trim(phone) != Trim(controller->session().user()->phone())) {
+		menu->addAction(
+			tr::lng_info_add_as_contact(tr::now),
+			[=, raw = base::make_weak(resolvePhoneAction.get())] {
+				controller->show(
+					Box<AddContactBox>(
+						&controller->session(),
+						raw ? raw->firstName() : QString(),
+						raw ? raw->lastName() : QString(),
+						Trim(phone)));
+			},
+			&st::menuIconInvite);
+	}
+
 	menu->addSeparator(&st::popupMenuExpandedSeparator.menu.separator);
 
-	menu->addAction(
-		base::make_unique_q<ResolvePhoneAction>(
-			menu,
-			menu->st().menu,
-			phone,
-			controller));
+	menu->addAction(std::move(resolvePhoneAction));
 
 	menu->popup(pos);
 }

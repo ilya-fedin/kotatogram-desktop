@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "platform/platform_main_window.h"
 #include "ui/layers/layer_widget.h"
 
+#include <QtCore/QStringList>
+
 class MainWidget;
 
 namespace Intro {
@@ -22,6 +24,7 @@ class MediaPreviewWidget;
 class SectionMemento;
 struct SectionShow;
 class PasscodeLockWidget;
+class SetupEmailLockWidget;
 namespace Theme {
 struct BackgroundUpdate;
 class WarningWidget;
@@ -49,6 +52,8 @@ public:
 
 	void setupPasscodeLock();
 	void clearPasscodeLock();
+	void setupSetupEmailLock();
+	void clearSetupEmailLock();
 	void setupIntro(Intro::EnterPoint point, QPixmap oldContentCache);
 	void setupMain(MsgId singlePeerShowAtMsgId, QPixmap oldContentCache);
 
@@ -63,7 +68,7 @@ public:
 
 	bool takeThirdSectionFromLayer();
 
-	void sendPaths();
+	void handleStartFiles(QStringList interprets, QStringList paths);
 
 	[[nodiscard]] bool contentOverlapped(const QRect &globalRect);
 	[[nodiscard]] bool contentOverlapped(QWidget *w, QPaintEvent *e) {
@@ -97,6 +102,8 @@ public:
 	void ui_hideSettingsAndLayer(anim::type animated);
 	void ui_removeLayerBlackout();
 	[[nodiscard]] bool ui_isLayerShown() const;
+	[[nodiscard]] rpl::producer<bool> ui_boxShownValue() const;
+	bool closeLayerByBackButton();
 	bool showMediaPreview(
 		Data::FileOrigin origin,
 		not_null<DocumentData*> document);
@@ -124,9 +131,11 @@ private:
 	QPoint _lastMousePosition;
 
 	object_ptr<Window::PasscodeLockWidget> _passcodeLock = { nullptr };
+	object_ptr<Window::SetupEmailLockWidget> _setupEmailLock = { nullptr };
 	object_ptr<Intro::Widget> _intro = { nullptr };
 	object_ptr<MainWidget> _main = { nullptr };
 	base::unique_qptr<Ui::LayerStackWidget> _layer;
+	rpl::variable<bool> _boxShown = false;
 	object_ptr<Window::MediaPreviewWidget> _mediaPreview = { nullptr };
 
 	object_ptr<Window::Theme::WarningWidget> _testingThemeWarning = { nullptr };

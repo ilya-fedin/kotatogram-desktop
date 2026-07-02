@@ -14,7 +14,12 @@ struct FilePrepareResult;
 
 namespace Data {
 struct InputVenue;
+class LocationPoint;
 } // namespace Data
+
+namespace MTP {
+class Error;
+} // namespace MTP
 
 namespace Main {
 class Session;

@@ -8,6 +8,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/expandable_peer_list.h"
 
 #include "data/data_peer.h"
+#include "info/profile/info_profile_values.h"
+#include "lang/lang_text_entity.h"
 #include "ui/controls/userpic_button.h"
 #include "ui/rect.h"
 #include "ui/text/text_utilities.h"
@@ -20,49 +22,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h"
 #include "styles/style_widgets.h"
 
+#include <cstdlib>
+
 namespace Ui {
 namespace {
 
-class Button final : public Ui::RippleButton {
-public:
-	Button(not_null<QWidget*> parent, int count);
-
-	[[nodiscard]] not_null<Ui::AbstractCheckView*> checkView() const;
-
-private:
-	void paintEvent(QPaintEvent *event) override;
-	QImage prepareRippleMask() const override;
-	QPoint prepareRippleStartPosition() const override;
-
-	std::unique_ptr<Ui::AbstractCheckView> _view;
-
-};
-
-Button::Button(not_null<QWidget*> parent, int count)
-: Ui::RippleButton(parent, st::defaultRippleAnimation)
-, _view(std::make_unique<Ui::ParticipantsCheckView>(
-	count,
-	st::slideWrapDuration,
-	false,
-	[=] { update(); })) {
-}
-
-not_null<Ui::AbstractCheckView*> Button::checkView() const {
-	return _view.get();
-}
-
-QImage Button::prepareRippleMask() const {
-	return _view->prepareRippleMask();
-}
-
-QPoint Button::prepareRippleStartPosition() const {
-	return mapFromGlobal(QCursor::pos());
-}
-
-void Button::paintEvent(QPaintEvent *event) {
-	auto p = QPainter(this);
-	Ui::RippleButton::paintRipple(p, QPoint());
-	_view->paint(p, 0, 0, width());
+[[nodiscard]] TextWithEntities ParticipantsExpanderText(int count) {
+	return tr::marked()
+		.append(st::moderateBoxExpand)
+		.append(QString::number(std::abs(count)));
 }
 
 } // namespace
@@ -84,16 +52,19 @@ void AddExpandablePeerList(
 	}
 	const auto count = int(participants.size());
 	const auto button = !hideRightButton
-		? Ui::CreateChild<Button>(inner, count)
+		? Ui::CreateChild<Ui::ExpanderButton>(
+			inner,
+			ParticipantsExpanderText(count))
 		: nullptr;
 	if (button) {
-		button->resize(Ui::ParticipantsCheckView::ComputeSize(count));
+		button->resize(Ui::ExpanderButton::ComputeSize(
+			ParticipantsExpanderText(count)));
 	}
 
 	const auto overlay = Ui::CreateChild<Ui::AbstractButton>(inner);
 
 	checkbox->geometryValue(
-	) | rpl::start_with_next([=](const QRect &rect) {
+	) | rpl::on_next([=](const QRect &rect) {
 		overlay->setGeometry(rect);
 		overlay->raise();
 
@@ -107,7 +78,7 @@ void AddExpandablePeerList(
 	}, overlay->lifetime());
 
 	controller->toggleRequestsFromInner.events(
-	) | rpl::start_with_next([=](bool toggled) {
+	) | rpl::on_next([=](bool toggled) {
 		checkbox->setChecked(toggled);
 	}, checkbox->lifetime());
 	if (button) {
@@ -131,7 +102,7 @@ void AddExpandablePeerList(
 		wrap->toggle(hideRightButton, anim::type::instant);
 
 		controller->toggleRequestsFromTop.events(
-		) | rpl::start_with_next([=](bool toggled) {
+		) | rpl::on_next([=](bool toggled) {
 			wrap->toggle(toggled, anim::type::normal);
 		}, wrap->lifetime());
 
@@ -148,19 +119,36 @@ void AddExpandablePeerList(
 			const auto &st = st::moderateBoxUserpic;
 			line->resize(line->width(), st.size.height());
 
-			const auto userpic = Ui::CreateChild<Ui::UserpicButton>(
-				line,
-				peer,
-				st);
+			using namespace Info::Profile;
+			auto name = controller->data.bold
+				? (NameValue(peer) | rpl::map(tr::bold) | rpl::type_erased)
+				: NameValue(peer) | rpl::map(tr::marked);
+			const auto userpic
+				= Ui::CreateChild<Ui::UserpicButton>(line, peer, st);
 			const auto checkbox = Ui::CreateChild<Ui::Checkbox>(
 				line,
-				controller->data.bold
-					? Ui::Text::Bold(peer->name())
-					: TextWithEntities{ .text = peer->name() },
-				ranges::contains(controller->data.checked, peer->id),
-				st::defaultBoxCheckbox);
-			line->widthValue(
-			) | rpl::start_with_next([=](int width) {
+				controller->data.messagesCounts
+				? rpl::combine(
+					std::move(name),
+					rpl::duplicate(controller->data.messagesCounts)
+				) | rpl::map([=](const auto &richName, const auto &map) {
+					const auto it = map.find(peer->id);
+					return (it == map.end() || !it->second)
+						? richName
+						: TextWithEntities{
+							(u"(%1) "_q).arg(it->second)
+						}.append(richName);
+				})
+				: std::move(name) | rpl::type_erased,
+				st::defaultBoxCheckbox,
+				std::make_unique<Ui::CheckView>(
+					st::defaultCheck,
+					ranges::contains(controller->data.checked, peer->id)));
+			checkbox->setCheckAlignment(style::al_left);
+			rpl::combine(
+				line->widthValue(),
+				checkbox->widthValue()
+			) | rpl::on_next([=](int width, int) {
 				userpic->moveToLeft(
 					st::boxRowPadding.left()
 						+ checkbox->checkRect().width()
@@ -189,7 +177,7 @@ void AddExpandablePeerList(
 		}) | ranges::to_vector;
 
 		clicks->events(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			controller->toggleRequestsFromInner.fire_copy(
 				checkTopOnAllInner
 				? ranges::all_of(checkboxes, &Ui::Checkbox::checked)
@@ -197,7 +185,7 @@ void AddExpandablePeerList(
 		}, container->lifetime());
 
 		controller->checkAllRequests.events(
-		) | rpl::start_with_next([=](bool checked) {
+		) | rpl::on_next([=](bool checked) {
 			for (const auto &c : checkboxes) {
 				c->setChecked(checked);
 			}

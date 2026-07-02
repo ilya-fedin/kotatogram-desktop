@@ -62,8 +62,10 @@ void SaveValidVideoInformation(
 
 	SaveValidStateInformation(to.state, std::move(from.state));
 	to.size = from.size;
+	to.realSize = from.realSize;
 	to.cover = std::move(from.cover);
 	to.rotation = from.rotation;
+	to.fps = from.fps;
 	to.alpha = from.alpha;
 }
 
@@ -715,12 +717,16 @@ void Player::start() {
 	_stage = Stage::Started;
 	const auto guard = base::make_weak(&_sessionGuard);
 
+	_file->speedEstimate() | rpl::on_next([=](SpeedEstimate value) {
+		_updates.fire({ value });
+	}, _sessionLifetime);
+
 	rpl::merge(
 		_audio ? _audio->waitingForData() : nullptr,
 		_video ? _video->waitingForData() : nullptr
 	) | rpl::filter([=] {
 		return !bothReceivedEnough(kBufferFor);
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		_pausedByWaitingForData = true;
 		updatePausedState();
 		_updates.fire({ WaitingForData{ true } });
@@ -728,7 +734,7 @@ void Player::start() {
 
 	if (guard && _audio && !_audioFinished) {
 		_audio->playPosition(
-		) | rpl::start_with_next_done([=](crl::time position) {
+		) | rpl::on_next_done([=](crl::time position) {
 			audioPlayedTill(position);
 		}, [=] {
 			Expects(_stage == Stage::Started);
@@ -742,7 +748,7 @@ void Player::start() {
 
 	if (guard && _video) {
 		_video->checkNextFrame(
-		) | rpl::start_with_next_done([=] {
+		) | rpl::on_next_done([=] {
 			checkVideoStep();
 		}, [=] {
 			Assert(_stage == Stage::Started);
@@ -756,7 +762,7 @@ void Player::start() {
 		crl::on_main_update_requests(
 		) | rpl::filter([=] {
 			return !_videoFinished;
-		}) | rpl::start_with_next([=] {
+		}) | rpl::on_next([=] {
 			checkVideoStep();
 		}, _sessionLifetime);
 	}
@@ -881,6 +887,10 @@ rpl::producer<bool> Player::fullInCache() const {
 	return _fullInCache.events();
 }
 
+int64 Player::fileSize() const {
+	return _file->size();
+}
+
 QSize Player::videoSize() const {
 	return _information.video.size;
 }
@@ -958,7 +968,9 @@ Media::Player::TrackState Player::prepareLegacyState() const {
 		if (duration > 0) {
 			result.length = duration;
 		} else {
-			result.length = std::max(crl::time(result.position), crl::time(0));
+			result.length = std::max(
+				crl::time(result.position),
+				crl::time(0));
 		}
 	}
 	return result;

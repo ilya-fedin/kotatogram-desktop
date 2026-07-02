@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/bytes.h"
 #include "base/algorithm.h"
 
+#include <cstdint>
 #include <crl/crl_time.h>
 
 #include <QSize>
@@ -19,17 +20,13 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
+#include <libswresample/swresample.h>
+#include <libavutil/opt.h>
 #include <libavutil/version.h>
 } // extern "C"
 
-#define DA_FFMPEG_NEW_CHANNEL_LAYOUT (LIBAVUTIL_VERSION_INT >= \
-	AV_VERSION_INT(57, 28, 100))
-
 #define DA_FFMPEG_CONST_WRITE_CALLBACK (LIBAVFORMAT_VERSION_INT >= \
 	AV_VERSION_INT(61, 01, 100))
-
-#define DA_FFMPEG_HAVE_DURATION (LIBAVUTIL_VERSION_INT >= \
-	AV_VERSION_INT(58, 02, 100))
 
 class QImage;
 
@@ -138,6 +135,16 @@ using FormatPointer = std::unique_ptr<AVFormatContext, FormatDeleter>;
 	int(*write)(void *opaque, uint8_t *buffer, int bufferSize),
 #endif
 	int64_t(*seek)(void *opaque, int64_t offset, int whence));
+[[nodiscard]] FormatPointer MakeWriteFormatPointer(
+	void *opaque,
+	int(*read)(void *opaque, uint8_t *buffer, int bufferSize),
+#if DA_FFMPEG_CONST_WRITE_CALLBACK
+	int(*write)(void *opaque, const uint8_t *buffer, int bufferSize),
+#else
+	int(*write)(void *opaque, uint8_t *buffer, int bufferSize),
+#endif
+	int64_t(*seek)(void *opaque, int64_t offset, int whence),
+	const QByteArray &format);
 
 struct CodecDeleter {
 	void operator()(AVCodecContext *value);
@@ -147,6 +154,7 @@ using CodecPointer = std::unique_ptr<AVCodecContext, CodecDeleter>;
 struct CodecDescriptor {
 	not_null<AVStream*> stream;
 	bool hwAllowed = false;
+	int64_t videoMaxArea = 0;
 };
 [[nodiscard]] CodecPointer MakeCodecPointer(CodecDescriptor descriptor);
 
@@ -179,10 +187,34 @@ using SwscalePointer = std::unique_ptr<SwsContext, SwscaleDeleter>;
 	QSize resize,
 	SwscalePointer *existing = nullptr);
 
-void LogError(const QString &method);
-void LogError(const QString &method, FFmpeg::AvErrorWrap error);
+struct SwresampleDeleter {
+	AVSampleFormat srcFormat = AV_SAMPLE_FMT_NONE;
+	int srcRate = 0;
+	int srcChannels = 0;
+	AVSampleFormat dstFormat = AV_SAMPLE_FMT_NONE;
+	int dstRate = 0;
+	int dstChannels = 0;
+
+	void operator()(SwrContext *value);
+};
+using SwresamplePointer = std::unique_ptr<SwrContext, SwresampleDeleter>;
+[[nodiscard]] SwresamplePointer MakeSwresamplePointer(
+	AVChannelLayout *srcLayout,
+	AVSampleFormat srcFormat,
+	int srcRate,
+	AVChannelLayout *dstLayout,
+	AVSampleFormat dstFormat,
+	int dstRate,
+	SwresamplePointer *existing = nullptr);
+
+void LogError(const QString &method, const QString &details = {});
+void LogError(
+	const QString &method,
+	FFmpeg::AvErrorWrap error,
+	const QString &details = {});
 
 [[nodiscard]] const AVCodec *FindDecoder(not_null<AVCodecContext*> context);
+[[nodiscard]] int64_t MaxPixelsForAreaLimit(int64_t area);
 [[nodiscard]] crl::time PtsToTime(int64_t pts, AVRational timeBase);
 // Used for full duration conversion.
 [[nodiscard]] crl::time PtsToTimeCeil(int64_t pts, AVRational timeBase);

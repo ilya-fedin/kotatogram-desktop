@@ -30,8 +30,6 @@ class Menu;
 
 namespace Media::Player {
 
-class SpeedButton;
-
 class Dropdown final : public Ui::RpWidget {
 public:
 	explicit Dropdown(QWidget *parent);
@@ -75,6 +73,7 @@ public:
 		not_null<QWidget*> menuParent,
 		const style::DropdownMenu &menuSt,
 		Qt::Alignment menuAlign,
+		QPoint menuPosition,
 		Fn<void(bool)> menuOverCallback);
 	virtual ~WithDropdownController() = default;
 
@@ -82,6 +81,7 @@ public:
 	Ui::DropdownMenu *menu() const;
 
 	void updateDropdownGeometry();
+	[[nodiscard]] rpl::producer<bool> menuToggledValue() const;
 
 	void hideTemporarily();
 	void showBack();
@@ -96,8 +96,10 @@ private:
 	const not_null<QWidget*> _menuParent;
 	const style::DropdownMenu &_menuSt;
 	const Qt::Alignment _menuAlign = Qt::AlignTop | Qt::AlignRight;
+	const QPoint _menuPosition;
 	const Fn<void(bool)> _menuOverCallback;
 	base::unique_qptr<Ui::DropdownMenu> _menu;
+	rpl::variable<bool> _menuToggled;
 	bool _temporarilyHidden = false;
 	bool _overButton = false;
 
@@ -125,13 +127,20 @@ private:
 class SpeedController final : public WithDropdownController {
 public:
 	SpeedController(
-		not_null<SpeedButton*> button,
+		not_null<Ui::AbstractButton*> button,
+		const style::MediaSpeedButton &st,
 		not_null<QWidget*> menuParent,
 		Fn<void(bool)> menuOverCallback,
 		Fn<float64(bool lastNonDefault)> value,
-		Fn<void(float64)> change);
+		Fn<void(float64)> change,
+		std::vector<VideoQuality> qualities = {},
+		Fn<VideoQuality()> quality = nullptr,
+		Fn<void(VideoQuality)> changeQuality = nullptr);
 
 	[[nodiscard]] rpl::producer<> saved() const;
+	[[nodiscard]] rpl::producer<float64> realtimeValue() const;
+	void reloadFromLookup();
+	void setQualities(std::vector<VideoQuality> qualities);
 
 private:
 	void fillMenu(not_null<Ui::DropdownMenu*> menu) override;
@@ -141,6 +150,7 @@ private:
 	[[nodiscard]] float64 lastNonDefaultSpeed() const;
 	void toggleDefault();
 	void setSpeed(float64 newSpeed);
+	void setQuality(VideoQuality quality);
 	void save();
 
 	const style::MediaSpeedButton &_st;
@@ -150,6 +160,11 @@ private:
 	bool _isDefault = true;
 	rpl::event_stream<float64> _speedChanged;
 	rpl::event_stream<> _saved;
+
+	std::vector<VideoQuality> _qualities;
+	Fn<VideoQuality()> _lookupQuality;
+	Fn<void(VideoQuality)> _changeQuality;
+	rpl::variable<VideoQuality> _quality;
 
 };
 

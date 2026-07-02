@@ -68,6 +68,8 @@ private:
 	[[nodiscard]] TextSelection toDescriptionSelection(
 		TextSelection selection) const;
 
+	[[nodiscard]] bool hasSingleLink() const;
+
 	const style::QuoteStyle &_st;
 	const int _pixh;
 
@@ -76,7 +78,6 @@ private:
 
 	Ui::Text::String _nameLine;
 	Ui::Text::String _phoneLine;
-	Ui::Text::String _infoLine;
 
 	Fn<void(not_null<Ui::GenericBox*>)> _vcardBoxFactory;
 

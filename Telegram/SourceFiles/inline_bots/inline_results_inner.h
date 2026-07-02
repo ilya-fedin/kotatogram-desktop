@@ -50,7 +50,7 @@ namespace InlineBots {
 namespace Layout {
 
 class ItemBase;
-using Results = std::vector<std::unique_ptr<Result>>;
+using Results = std::vector<std::shared_ptr<Result>>;
 
 struct CacheEntry {
 	QString nextOffset;
@@ -58,6 +58,7 @@ struct CacheEntry {
 	QString switchPmStartToken;
 	QByteArray switchPmUrl;
 	Results results;
+	bool gallery = false;
 };
 
 class Inner
@@ -108,6 +109,7 @@ protected:
 	void mousePressEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;
 	void mouseMoveEvent(QMouseEvent *e) override;
+	void resizeEvent(QResizeEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
 	void leaveToChildEvent(QEvent *e, QWidget *child) override;
@@ -134,8 +136,9 @@ private:
 	void updateInlineItems();
 	void repaintItems(crl::time now = 0);
 	void clearInlineRows(bool resultsDeleted);
-	ItemBase *layoutPrepareInlineResult(Result *result);
+	ItemBase *layoutPrepareInlineResult(std::shared_ptr<Result> result);
 
+	void updateRestrictedLabelGeometry();
 	void deleteUnusedInlineLayouts();
 
 	int validateExistingInlineRows(const Results &results);
@@ -157,12 +160,14 @@ private:
 	crl::time _lastUpdatedAt = 0;
 	base::Timer _updateInlineItems;
 	bool _inlineWithThumb = false;
+	bool _gallery = false;
 
 	object_ptr<Ui::RoundButton> _switchPmButton = { nullptr };
 	QString _switchPmStartToken;
 	QByteArray _switchPmUrl;
 
 	object_ptr<Ui::FlatLabel> _restrictedLabel = { nullptr };
+	QString _restrictedLabelKey;
 
 	base::unique_qptr<Ui::PopupMenu> _menu;
 

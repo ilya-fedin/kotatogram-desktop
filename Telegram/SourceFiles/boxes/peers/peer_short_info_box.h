@@ -15,6 +15,10 @@ struct ShortInfoCover;
 struct ShortInfoBox;
 } // namespace style
 
+namespace Ui::Menu {
+struct MenuCallback;
+} // namespace Ui::Menu
+
 namespace Media::Streaming {
 class Document;
 class Instance;
@@ -37,11 +41,15 @@ enum class PeerShortInfoType {
 
 struct PeerShortInfoFields {
 	QString name;
+	QString channelName;
+	QString channelLink;
 	QString phone;
 	QString link;
 	TextWithEntities about;
 	QString username;
+	QString usernameLink;
 	Data::Birthday birthday;
+	TextWithEntities note;
 	bool isBio = false;
 };
 
@@ -117,6 +125,7 @@ private:
 	object_ptr<Ui::FlatLabel> _additionalStatus = { nullptr };
 
 	std::array<QImage, 4> _roundMask;
+	std::array<QImage, 4> _roundMaskRetina;
 	QImage _userpicImage;
 	QImage _roundedTopImage;
 	QImage _barSmall;
@@ -158,6 +167,11 @@ public:
 
 	[[nodiscard]] rpl::producer<> openRequests() const;
 	[[nodiscard]] rpl::producer<int> moveRequests() const;
+	[[nodiscard]] auto fillMenuRequests() const
+	-> rpl::producer<Ui::Menu::MenuCallback>;
+
+protected:
+	void contextMenuEvent(QContextMenuEvent *e) override;
 
 private:
 	void prepare() override;
@@ -169,12 +183,14 @@ private:
 	int fillRoundedTopHeight();
 
 	[[nodiscard]] rpl::producer<QString> nameValue() const;
+	[[nodiscard]] rpl::producer<TextWithEntities> channelValue() const;
 	[[nodiscard]] rpl::producer<TextWithEntities> linkValue() const;
 	[[nodiscard]] rpl::producer<QString> phoneValue() const;
-	[[nodiscard]] rpl::producer<QString> usernameValue() const;
+	[[nodiscard]] rpl::producer<TextWithEntities> usernameValue() const;
 	[[nodiscard]] rpl::producer<QString> birthdayLabel() const;
 	[[nodiscard]] rpl::producer<QString> birthdayValue() const;
 	[[nodiscard]] rpl::producer<TextWithEntities> aboutValue() const;
+	[[nodiscard]] rpl::producer<TextWithEntities> noteValue() const;
 
 	const style::ShortInfoBox &_st;
 	const PeerShortInfoType _type = PeerShortInfoType::User;
@@ -188,6 +204,9 @@ private:
 	object_ptr<Ui::ScrollArea> _scroll;
 	not_null<Ui::VerticalLayout*> _rows;
 	PeerShortInfoCover _cover;
+
+	base::unique_qptr<Ui::RpWidget> _menuHolder;
+	rpl::event_stream<Ui::Menu::MenuCallback> _fillMenuRequests;
 
 	rpl::event_stream<> _openRequests;
 

@@ -79,7 +79,7 @@ Step::Step(
 			: st::introDescription)) {
 	hide();
 	style::PaletteChanged(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		if (!_coverMask.isNull()) {
 			_coverMask = QPixmap();
 			prepareCoverMask();
@@ -87,19 +87,27 @@ Step::Step(
 	}, lifetime());
 
 	_errorText.value(
-	) | rpl::start_with_next([=](const QString &text) {
+	) | rpl::on_next([=](const QString &text) {
 		refreshError(text);
 	}, lifetime());
 
 	_titleText.value(
-	) | rpl::start_with_next([=](const QString &text) {
+	) | rpl::on_next([=](const QString &text) {
 		_title->setText(text);
+		accessibilityNameChanged();
 		updateLabelsPosition();
 	}, lifetime());
 
 	_descriptionText.value(
-	) | rpl::start_with_next([=](const TextWithEntities &text) {
-		_description->entity()->setMarkedText(text);
+	) | rpl::on_next([=](const TextWithEntities &text) {
+		const auto label = _description->entity();
+		const auto hasSpoiler = ranges::contains(
+			text.entities,
+			EntityType::Spoiler,
+			&EntityInText::type);
+		label->setMarkedText(text);
+		label->setAttribute(Qt::WA_TransparentForMouseEvents, hasSpoiler);
+		accessibilityDescriptionChanged();
 		updateLabelsPosition();
 	}, lifetime());
 }
@@ -123,6 +131,10 @@ rpl::producer<QString> Step::nextButtonText() const {
 
 rpl::producer<const style::RoundButton*> Step::nextButtonStyle() const {
 	return rpl::single((const style::RoundButton*)(nullptr));
+}
+
+rpl::producer<> Step::nextButtonFocusRequests() const {
+	return rpl::never();
 }
 
 void Step::goBack() {
@@ -194,16 +206,18 @@ void Step::finish(const MTPUser &user, QImage &&photo) {
 
 	api().request(MTPmessages_GetDialogFilters(
 	)).done([=](const MTPmessages_DialogFilters &result) {
-		createSession(user, photo, result.data().vfilters().v);
+		const auto &d = result.data();
+		createSession(user, photo, d.vfilters().v, d.is_tags_enabled());
 	}).fail([=] {
-		createSession(user, photo, QVector<MTPDialogFilter>());
+		createSession(user, photo, QVector<MTPDialogFilter>(), false);
 	}).send();
 }
 
 void Step::createSession(
 		const MTPUser &user,
 		QImage photo,
-		const QVector<MTPDialogFilter> &filters) {
+		const QVector<MTPDialogFilter> &filters,
+		bool tagsEnabled) {
 	// Save the default language if we've suggested some other and user ignored it.
 	const auto currentId = Lang::Id();
 	const auto defaultId = Lang::DefaultLanguageId();
@@ -227,7 +241,7 @@ void Step::createSession(
 	account->local().enforceModernStorageIdBots();
 	account->local().writeMtpData();
 	auto &session = account->session();
-	session.data().chatsFilters().setPreloaded(filters);
+	session.data().chatsFilters().setPreloaded(filters, tagsEnabled);
 	if (hasFilters) {
 		session.saveSettingsDelayed();
 	}
@@ -280,15 +294,8 @@ void Step::setTitleText(rpl::producer<QString> titleText) {
 	_titleText = std::move(titleText);
 }
 
-void Step::setDescriptionText(
-		rpl::producer<QString> descriptionText) {
-	setDescriptionText(
-		std::move(descriptionText) | Ui::Text::ToWithEntities());
-}
-
-void Step::setDescriptionText(
-		rpl::producer<TextWithEntities> richDescriptionText) {
-	_descriptionText = std::move(richDescriptionText);
+void Step::setDescriptionText(v::text::data &&descriptionText) {
+	_descriptionText = v::text::take_marked(std::move(descriptionText));
 }
 
 void Step::showFinished() {
@@ -367,14 +374,15 @@ void Step::fillSentCodeData(const MTPDauth_sentCode &data) {
 		bad("MissedCall");
 	}, [&](const MTPDauth_sentCodeTypeFirebaseSms &) {
 		bad("FirebaseSms");
-	}, [&](const MTPDauth_sentCodeTypeEmailCode &) {
-		bad("EmailCode");
+	}, [&](const MTPDauth_sentCodeTypeEmailCode &data) {
+		getData()->emailPatternLogin = qs(data.vemail_pattern());
+		getData()->codeLength = data.vlength().v;
 	}, [&](const MTPDauth_sentCodeTypeSmsWord &) {
 		bad("SmsWord");
 	}, [&](const MTPDauth_sentCodeTypeSmsPhrase &) {
 		bad("SmsPhrase");
 	}, [&](const MTPDauth_sentCodeTypeSetUpEmailRequired &) {
-		bad("SetUpEmailRequired");
+		getData()->emailStatus = EmailStatus::SetupRequired;
 	});
 }
 

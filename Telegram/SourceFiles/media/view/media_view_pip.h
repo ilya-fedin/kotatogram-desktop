@@ -7,12 +7,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "data/data_file_origin.h"
 #include "media/streaming/media_streaming_instance.h"
+#include "media/media_common.h"
 #include "ui/effects/animations.h"
 #include "ui/round_rect.h"
 #include "ui/rp_widget.h"
 
 #include <QtCore/QPointer>
+
+class HistoryItem;
 
 namespace base {
 class PowerSaveBlocker;
@@ -21,6 +25,10 @@ class PowerSaveBlocker;
 namespace Data {
 class DocumentMedia;
 } // namespace Data
+
+namespace style {
+struct Shadow;
+} // namespace style
 
 namespace Ui {
 class IconButton;
@@ -32,12 +40,15 @@ struct Capabilities;
 } // namespace GL
 } // namespace Ui
 
-namespace Media {
-namespace Player {
+namespace Media::Player {
 struct TrackState;
-} // namespace Player
+} // namespace Media::Player
 
-namespace View {
+namespace Media::Streaming {
+class Document;
+} // namespace Media::Streaming
+
+namespace Media::View {
 
 class PlaybackProgress;
 
@@ -45,6 +56,7 @@ class PlaybackProgress;
 [[nodiscard]] bool UsePainterRotation(int rotation);
 [[nodiscard]] QSize FlipSizeByRotation(QSize size, int rotation);
 [[nodiscard]] QImage RotateFrameImage(QImage image, int rotation);
+[[nodiscard]] const style::Shadow &PipShadow();
 
 class PipPanel final {
 public:
@@ -97,7 +109,8 @@ private:
 	void moveAnimated(QPoint to);
 	void updateDecorations();
 
-	const std::unique_ptr<Ui::RpWidgetWrap> _content;
+	const std::unique_ptr<Ui::RpWidget> _window;
+	std::unique_ptr<Ui::RpWidgetWrap> _content;
 	const QPointer<QWidget> _parent;
 	RectParts _attached = RectParts();
 	RectParts _snapped = RectParts();
@@ -134,10 +147,16 @@ public:
 	Pip(
 		not_null<Delegate*> delegate,
 		not_null<DocumentData*> data,
+		Data::FileOrigin origin,
+		not_null<DocumentData*> chosenQuality,
+		HistoryItem *context,
+		VideoQuality quality,
 		std::shared_ptr<Streaming::Document> shared,
 		FnMut<void()> closeAndContinue,
 		FnMut<void()> destroy);
 	~Pip();
+
+	[[nodiscard]] std::shared_ptr<Streaming::Document> shared() const;
 
 private:
 	enum class OverState {
@@ -179,6 +198,7 @@ private:
 	class Renderer;
 	class RendererGL;
 	class RendererSW;
+	class RendererRhi;
 
 	void setupPanel();
 	void setupButtons();
@@ -245,6 +265,8 @@ private:
 		QRect outer,
 		float64 shown) const;
 	[[nodiscard]] QRect countRadialRect() const;
+	void applyVideoQuality(VideoQuality value);
+	[[nodiscard]] QImage currentVideoFrameImage() const;
 
 	void seekUpdate(QPoint position);
 	void seekProgress(float64 value);
@@ -252,13 +274,21 @@ private:
 
 	const not_null<Delegate*> _delegate;
 	const not_null<DocumentData*> _data;
-	Streaming::Instance _instance;
+	const Data::FileOrigin _origin;
+	DocumentData *_chosenQuality = nullptr;
+	HistoryItem *_context = nullptr;
+	Media::VideoQuality _quality;
+	std::optional<Streaming::Instance> _instance;
 	bool _opengl = false;
 	PipPanel _panel;
 	QSize _size;
 	std::unique_ptr<base::PowerSaveBlocker> _powerSaveBlocker;
 	std::unique_ptr<PlaybackProgress> _playbackProgress;
 	std::shared_ptr<Data::DocumentMedia> _dataMedia;
+
+	QImage _qualityChangeFrame;
+	bool _qualityChangeFinished = false;
+	crl::time _lastUpdatePosition = 0;
 
 	bool _showPause = false;
 	bool _startPaused = false;
@@ -288,5 +318,4 @@ private:
 
 };
 
-} // namespace View
-} // namespace Media
+} // namespace Media::View

@@ -31,6 +31,12 @@ namespace {
 
 constexpr auto kDontCacheLottieAfterArea = 512 * 512;
 
+[[nodiscard]] uint64 LocalStickerId(QStringView name) {
+	auto full = u"local_sticker:"_q;
+	full.append(name);
+	return XXH64(full.data(), full.size() * sizeof(QChar), 0);
+}
+
 } // namespace
 
 uint8 LottieCacheKeyShift(uint8 replacementsTag, StickerLottieSize sizeTag) {
@@ -192,9 +198,7 @@ std::unique_ptr<Lottie::SinglePlayer> LottieThumbnail(
 	};
 	const auto session = thumb
 		? &thumb->owner()->session()
-		: media
-		? &media->owner()->session()
-		: nullptr;
+		: &media->owner()->session();
 	return LottieCachedFromContent(
 		method,
 		baseKey,
@@ -317,27 +321,17 @@ QSize ComputeStickerSize(not_null<DocumentData*> document, QSize box) {
 	return HistoryView::NonEmptySize(request.size(dimensions, 8) / ratio);
 }
 
-[[nodiscard]] uint64 LocalTgsStickerId(QStringView name) {
-	auto full = u"local_tgs_sticker:"_q;
-	full.append(name);
-	return XXH64(full.data(), full.size() * sizeof(QChar), 0);
-}
-
-not_null<DocumentData*> GenerateLocalTgsSticker(
+not_null<DocumentData*> GenerateLocalSticker(
 		not_null<Main::Session*> session,
-		const QString &name) {
-	const auto path = u":/animations/"_q + name + u".tgs"_q;
-	auto task = FileLoadTask(
-		session,
-		path,
-		QByteArray(),
-		nullptr,
-		SendMediaType::File,
-		FileLoadTo(0, {}, {}, 0),
-		{},
-		false,
-		nullptr,
-		LocalTgsStickerId(name));
+		const QString &path) {
+	auto task = FileLoadTask(FileLoadTask::Args{
+		.session = session,
+		.filepath = path,
+		.type = SendMediaType::File,
+		.to = FileLoadTo(0, {}, {}, 0),
+		.caption = {},
+		.idOverride = LocalStickerId(path),
+	});
 	task.process({ .generateGoodThumbnail = false });
 	const auto result = task.peekResult();
 	Assert(result != nullptr);
@@ -350,8 +344,50 @@ not_null<DocumentData*> GenerateLocalTgsSticker(
 	document->setLocation(Core::FileLocation(path));
 
 	Ensures(document->sticker());
-	Ensures(document->sticker()->isLottie());
 	return document;
+}
+
+not_null<DocumentData*> GenerateLocalTgsSticker(
+		not_null<Main::Session*> session,
+		const QString &name,
+		bool useTextColor) {
+	const auto cache = [&] {
+		struct Session {
+			base::weak_ptr<Main::Session> session;
+			base::flat_map<QString, not_null<DocumentData*>> cache;
+		};
+		static auto Map = std::vector<Session>();
+		for (auto i = begin(Map); i != end(Map);) {
+			if (const auto strong = i->session.get()) {
+				if (strong == session) {
+					return &i->cache;
+				}
+				++i;
+			} else {
+				i = Map.erase(i);
+			}
+		}
+		Map.push_back({ .session = session });
+		return &Map.back().cache;
+	}();
+
+	const auto key = useTextColor ? (name + u"/:/1"_q) : name;
+	const auto i = cache->find(key);
+	if (i != end(*cache)) {
+		return i->second;
+	}
+
+	const auto result = GenerateLocalSticker(
+		session,
+		u":/animations/"_q + name + u".tgs"_q);
+	if (useTextColor) {
+		result->overrideEmojiUsesTextColor(true);
+	}
+
+	cache->emplace(key, result);
+
+	Ensures(result->sticker()->isLottie());
+	return result;
 }
 
 } // namespace ChatHelpers

@@ -17,11 +17,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_streaming.h"
 #include "data/data_peer_values.h"
 #include "data/data_premium_limits.h"
+#include "info/profile/info_profile_icon.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "main/main_domain.h" // kMaxAccounts
 #include "ui/chat/chat_theme.h"
 #include "ui/chat/chat_style.h"
+#include "ui/controls/feature_list.h"
 #include "ui/layers/generic_box.h"
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/premium_graphics.h"
@@ -34,8 +36,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "ui/painter.h"
 #include "ui/vertical_list.h"
-#include "settings/settings_business.h"
-#include "settings/settings_premium.h"
+#include "settings/sections/settings_business.h"
+#include "settings/sections/settings_premium.h"
 #include "lottie/lottie_single_player.h"
 #include "history/view/media/history_view_sticker.h"
 #include "history/view/history_view_element.h"
@@ -44,7 +46,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "api/api_premium.h"
 #include "apiwrap.h"
+#include "styles/style_credits.h" // upgradeGiftSubtext
+#include "styles/style_info.h" // infoStarsUnderstood
 #include "styles/style_layers.h"
+#include "styles/style_menu_icons.h"
 #include "styles/style_premium.h"
 #include "styles/style_settings.h"
 
@@ -78,7 +83,7 @@ bool operator==(const Descriptor &a, const Descriptor &b) {
 struct Preload {
 	Descriptor descriptor;
 	std::shared_ptr<Data::DocumentMedia> media;
-	std::weak_ptr<ChatHelpers::Show> show;
+	std::weak_ptr<Main::SessionShow> show;
 };
 
 [[nodiscard]] std::vector<Preload> &Preloads() {
@@ -134,6 +139,16 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		return tr::lng_premium_summary_subtitle_business();
 	case PremiumFeature::Effects:
 		return tr::lng_premium_summary_subtitle_effects();
+	case PremiumFeature::TodoLists:
+		return tr::lng_premium_summary_subtitle_todo_lists();
+	case PremiumFeature::PeerColors:
+		return tr::lng_premium_summary_subtitle_peer_colors();
+	case PremiumFeature::Gifts:
+		return tr::lng_premium_summary_subtitle_gifts();
+	case PremiumFeature::NoForwards:
+		return tr::lng_premium_summary_subtitle_no_forwards();
+	case PremiumFeature::AiCompose:
+		return tr::lng_premium_summary_subtitle_ai_compose();
 
 	case PremiumFeature::BusinessLocation:
 		return tr::lng_business_subtitle_location();
@@ -151,6 +166,8 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		return tr::lng_business_subtitle_chat_intro();
 	case PremiumFeature::ChatLinks:
 		return tr::lng_business_subtitle_chat_links();
+	case PremiumFeature::FilterTags:
+		return tr::lng_premium_summary_subtitle_filter_tags();
 	}
 	Unexpected("PremiumFeature in SectionTitle.");
 }
@@ -197,6 +214,16 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		return tr::lng_premium_summary_about_business();
 	case PremiumFeature::Effects:
 		return tr::lng_premium_summary_about_effects();
+	case PremiumFeature::TodoLists:
+		return tr::lng_premium_summary_about_todo_lists();
+	case PremiumFeature::PeerColors:
+		return tr::lng_premium_summary_about_peer_colors();
+	case PremiumFeature::Gifts:
+		return tr::lng_premium_summary_about_gifts();
+	case PremiumFeature::NoForwards:
+		return tr::lng_premium_summary_about_no_forwards();
+	case PremiumFeature::AiCompose:
+		return tr::lng_premium_summary_about_ai_compose();
 
 	case PremiumFeature::BusinessLocation:
 		return tr::lng_business_about_location();
@@ -214,6 +241,8 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		return tr::lng_business_about_chat_intro();
 	case PremiumFeature::ChatLinks:
 		return tr::lng_business_about_chat_links();
+	case PremiumFeature::FilterTags:
+		return tr::lng_premium_summary_about_filter_tags();
 	}
 	Unexpected("PremiumFeature in SectionTitle.");
 }
@@ -226,7 +255,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 	const auto raw = result.data();
 
 	raw->paintRequest(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		auto p = QPainter(raw);
 		p.drawImage(0, 0, back);
 	}, raw->lifetime());
@@ -250,7 +279,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 	result->show();
 
 	parent->sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
+	) | rpl::on_next([=](QSize size) {
 		result->setGeometry(QRect(
 			QPoint(
 				(size.width() - effectSize.width()) / 2,
@@ -304,8 +333,8 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 			result->update();
 		};
 		auto &lifetime = result->lifetime();
-		state->lottie->updates() | rpl::start_with_next(update, lifetime);
-		state->effect->updates() | rpl::start_with_next(update, lifetime);
+		state->lottie->updates() | rpl::on_next(update, lifetime);
+		state->effect->updates() | rpl::on_next(update, lifetime);
 	};
 	createLottieIfReady();
 	if (!state->lottie || !state->effect) {
@@ -322,7 +351,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		rpl::never<>());
 
 	result->paintRequest(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		createLottieIfReady();
 
 		auto p = QPainter(result);
@@ -380,7 +409,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 	result->show();
 
 	parent->sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
+	) | rpl::on_next([=](QSize size) {
 		result->setGeometry(QRect(QPoint(), size));
 	}, result->lifetime());
 	auto &lifetime = result->lifetime();
@@ -406,7 +435,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 		outer->show();
 
 		result->sizeValue(
-		) | rpl::start_with_next([=](QSize size) {
+		) | rpl::on_next([=](QSize size) {
 			outer->resize(size);
 		}, outer->lifetime());
 
@@ -476,7 +505,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 	result->shownValue(
 	) | rpl::filter([=](bool shown) {
 		return shown && state->toggleTimerPending;
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		state->toggleTimerPending = false;
 		state->toggleTimer.callOnce(kToggleStickerTimeout);
 	}, result->lifetime());
@@ -496,7 +525,7 @@ void PreloadSticker(const std::shared_ptr<Data::DocumentMedia> &media) {
 	fill();
 	if (state->medias.empty()) {
 		premium->stickersUpdated(
-		) | rpl::take(1) | rpl::start_with_next(fill, lifetime);
+		) | rpl::take(1) | rpl::on_next(fill, lifetime);
 	}
 
 	return result;
@@ -535,6 +564,11 @@ struct VideoPreviewDocument {
 		case PremiumFeature::LastSeen: return "last_seen";
 		case PremiumFeature::MessagePrivacy: return "message_privacy";
 		case PremiumFeature::Effects: return "effects";
+		case PremiumFeature::TodoLists: return "todo";
+		case PremiumFeature::PeerColors: return "peer_colors";
+		case PremiumFeature::Gifts: return "gifts";
+		case PremiumFeature::NoForwards: return "no_forwards";
+		case PremiumFeature::AiCompose: return "ai_compose";
 
 		case PremiumFeature::BusinessLocation: return "business_location";
 		case PremiumFeature::BusinessHours: return "business_hours";
@@ -544,6 +578,7 @@ struct VideoPreviewDocument {
 		case PremiumFeature::BusinessBots: return "business_bots";
 		case PremiumFeature::ChatIntro: return "business_intro";
 		case PremiumFeature::ChatLinks: return "business_links";
+		case PremiumFeature::FilterTags: return "folder_tags";
 		}
 		return "";
 	}();
@@ -614,7 +649,7 @@ struct VideoPreviewDocument {
 	result->show();
 
 	parent->sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
+	) | rpl::on_next([=](QSize size) {
 		result->setGeometry(parent->rect());
 	}, result->lifetime());
 	auto &lifetime = result->lifetime();
@@ -684,7 +719,7 @@ struct VideoPreviewDocument {
 		}
 	};
 	state->instance.player().updates(
-	) | rpl::start_with_next_error([=](Media::Streaming::Update &&update) {
+	) | rpl::on_next_error([=](Media::Streaming::Update &&update) {
 		if (v::is<Media::Streaming::Information>(update.data)
 			|| v::is<Media::Streaming::UpdateVideo>(update.data)) {
 			if (!state->readyInvoked && readyCallback) {
@@ -704,7 +739,7 @@ struct VideoPreviewDocument {
 	});
 
 	result->paintRequest(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		auto p = QPainter(result);
 		const auto paintFrame = [&](QColor color, float64 thickness) {
 			auto hq = PainterHighQualityEnabler(p);
@@ -776,7 +811,7 @@ struct VideoPreviewDocument {
 	result->show();
 
 	parent->sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
+	) | rpl::on_next([=](QSize size) {
 		result->setGeometry(QRect(QPoint(), size));
 	}, result->lifetime());
 	auto &lifetime = result->lifetime();
@@ -802,7 +837,7 @@ struct VideoPreviewDocument {
 	create();
 	if (!state->single) {
 		session->api().premium().videosUpdated(
-		) | rpl::take(1) | rpl::start_with_next(create, lifetime);
+		) | rpl::take(1) | rpl::on_next(create, lifetime);
 	}
 
 	return result;
@@ -851,7 +886,7 @@ struct VideoPreviewDocument {
 		const auto section = order[i];
 		const auto button = Ui::CreateChild<Ui::AbstractButton>(raw);
 		parent->widthValue(
-		) | rpl::start_with_next([=](int outer) {
+		) | rpl::on_next([=](int outer) {
 			const auto full = width * count;
 			const auto left = (outer - full) / 2 + (i * width);
 			button->setGeometry(left, 0, width, height);
@@ -860,7 +895,7 @@ struct VideoPreviewDocument {
 			*selected = section;
 		});
 		button->paintRequest(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			auto p = QPainter(button);
 			auto hq = PainterHighQualityEnabler(p);
 			p.setBrush((selected->current() == section)
@@ -873,11 +908,36 @@ struct VideoPreviewDocument {
 				button->rect().marginsRemoved(st::premiumDotPadding));
 		}, button->lifetime());
 		selected->changes(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			button->update();
 		}, button->lifetime());
 	}
 	return result;
+}
+
+void AddGiftsInfoRows(not_null<Ui::VerticalLayout*> container) {
+	const auto features = std::vector<Ui::FeatureListEntry>{
+		{
+			st::menuIconUnique,
+			tr::lng_gift_upgrade_unique_title(tr::now),
+			tr::lng_gift_upgrade_unique_about(tr::now, tr::marked),
+		},
+		{
+			st::menuIconTradable,
+			tr::lng_gift_upgrade_tradable_title(tr::now),
+			tr::lng_gift_upgrade_tradable_about(tr::now, tr::marked),
+		},
+		{
+			st::menuIconNftWear,
+			tr::lng_gift_upgrade_wearable_title(tr::now),
+			tr::lng_gift_upgrade_wearable_about(tr::now, tr::marked),
+		},
+	};
+	for (const auto &feature : features) {
+		container->add(
+			Ui::MakeFeatureListEntry(container, feature),
+			st::boxRowPadding);
+	}
 }
 
 void PreviewBox(
@@ -893,7 +953,7 @@ void PreviewBox(
 
 	const auto outer = box->addRow(
 		ChatBackPreview(box, size.height(), back),
-		{});
+		style::margins());
 
 	struct Hiding {
 		not_null<Ui::RpWidget*> widget;
@@ -942,22 +1002,32 @@ void PreviewBox(
 		st::settingsPremiumTopBarClose);
 	close->setClickedCallback([=] { box->closeBox(); });
 
-	const auto left = Ui::CreateChild<Ui::IconButton>(
+	const auto gifts = (state->selected.current() == PremiumFeature::Gifts);
+
+	const auto left = gifts ? nullptr : Ui::CreateChild<Ui::IconButton>(
 		buttonsParent,
 		st::settingsPremiumMoveLeft);
-	left->setClickedCallback([=] { move(-1); });
+	if (left) {
+		left->setClickedCallback([=] { move(-1); });
+	}
 
-	const auto right = Ui::CreateChild<Ui::IconButton>(
+	const auto right = gifts ? nullptr : Ui::CreateChild<Ui::IconButton>(
 		buttonsParent,
 		st::settingsPremiumMoveRight);
-	right->setClickedCallback([=] { move(1); });
+	if (right) {
+		right->setClickedCallback([=] { move(1); });
+	}
 
 	buttonsParent->widthValue(
-	) | rpl::start_with_next([=](int width) {
+	) | rpl::on_next([=](int width) {
 		const auto outerHeight = st::premiumPreviewHeight;
 		close->moveToRight(0, 0, width);
-		left->moveToLeft(0, (outerHeight - left->height()) / 2, width);
-		right->moveToRight(0, (outerHeight - right->height()) / 2, width);
+		if (left) {
+			left->moveToLeft(0, (outerHeight - left->height()) / 2, width);
+		}
+		if (right) {
+			right->moveToRight(0, (outerHeight - right->height()) / 2, width);
+		}
 	}, close->lifetime());
 
 	state->preload = [=] {
@@ -1000,7 +1070,7 @@ void PreviewBox(
 
 	state->selected.value(
 	) | rpl::combine_previous(
-	) | rpl::start_with_next([=](PremiumFeature was, PremiumFeature now) {
+	) | rpl::on_next([=](PremiumFeature was, PremiumFeature now) {
 		const auto animationCallback = [=] {
 			if (!state->animation.animating()) {
 				for (const auto &hiding : base::take(state->hiding)) {
@@ -1070,36 +1140,45 @@ void PreviewBox(
 	auto text = state->selected.value(
 	) | rpl::map(SectionAbout) | rpl::flatten_latest();
 
-	const auto padding = st::premiumPreviewAboutPadding;
-	const auto available = size.width() - padding.left() - padding.right();
-	auto titleLabel = object_ptr<Ui::FlatLabel>(
-		box,
-		std::move(title),
-		st::premiumPreviewAboutTitle);
-	titleLabel->resizeToWidth(available);
 	box->addRow(
-		object_ptr<Ui::CenterWrap<Ui::FlatLabel>>(
+		object_ptr<Ui::FlatLabel>(
 			box,
-			std::move(titleLabel)),
-		st::premiumPreviewAboutTitlePadding);
-	auto textLabel = object_ptr<Ui::FlatLabel>(
-		box,
-		std::move(text),
-		st::premiumPreviewAbout);
-	textLabel->resizeToWidth(available);
+			std::move(title),
+			st::premiumPreviewAboutTitle),
+		st::premiumPreviewAboutTitlePadding,
+		style::al_top);
 	box->addRow(
-		object_ptr<Ui::CenterWrap<Ui::FlatLabel>>(box, std::move(textLabel)),
-		padding);
-	box->addRow(
-		CreateSwitch(box->verticalLayout(), &state->selected, state->order),
-		st::premiumDotsMargin);
+		object_ptr<Ui::FlatLabel>(
+			box,
+			std::move(text),
+			st::premiumPreviewAbout),
+		st::premiumPreviewAboutPadding,
+		style::al_top
+	)->setTryMakeSimilarLines(true);
+
+	if (gifts) {
+		box->setStyle(st::giftBox);
+		AddGiftsInfoRows(box->verticalLayout());
+	} else {
+		box->addRow(
+			CreateSwitch(box->verticalLayout(), &state->selected, state->order),
+			st::premiumDotsMargin);
+	}
 	const auto showFinished = [=] {
 		state->showFinished = true;
 		if (base::take(state->preloadScheduled)) {
 			state->preload();
 		}
 	};
-	if ((descriptor.fromSettings && show->session().premium())
+	if (gifts) {
+		box->setShowFinishedCallback(showFinished);
+		box->addButton(
+			rpl::single(QString()),
+			[=] { box->closeBox(); }
+		)->setText(rpl::single(Ui::Text::IconEmoji(
+			&st::infoStarsUnderstood
+		).append(' ').append(tr::lng_auction_about_understood(tr::now))));
+	} else if ((descriptor.fromSettings && show->session().premium())
 		|| descriptor.hideSubscriptionButton) {
 		box->setShowFinishedCallback(showFinished);
 		box->addButton(tr::lng_close(), [=] { box->closeBox(); });
@@ -1135,8 +1214,7 @@ void PreviewBox(
 		button->resizeToWidth(width);
 		if (!descriptor.fromSettings) {
 			button->setClickedCallback([=] {
-				const auto window = show->resolveWindow(
-					ChatHelpers::WindowUsage::PremiumPromo);
+				const auto window = show->resolveWindow();
 				if (!window) {
 					return;
 				}
@@ -1155,13 +1233,13 @@ void PreviewBox(
 	if (descriptor.fromSettings) {
 		Data::AmPremiumValue(
 			&show->session()
-		) | rpl::skip(1) | rpl::start_with_next([=] {
+		) | rpl::skip(1) | rpl::on_next([=] {
 			box->closeBox();
 		}, box->lifetime());
 	}
 
 	box->events(
-	) | rpl::start_with_next([=](not_null<QEvent*> e) {
+	) | rpl::on_next([=](not_null<QEvent*> e) {
 		if (e->type() == QEvent::KeyPress) {
 			const auto key = static_cast<QKeyEvent*>(e.get())->key();
 			if (key == Qt::Key_Left) {
@@ -1173,7 +1251,7 @@ void PreviewBox(
 	}, box->lifetime());
 
 	if (const auto &hidden = descriptor.hiddenCallback) {
-		box->boxClosing() | rpl::start_with_next(hidden, box->lifetime());
+		box->boxClosing() | rpl::on_next(hidden, box->lifetime());
 	}
 }
 
@@ -1219,13 +1297,13 @@ void DecorateListPromoBox(
 	if (!descriptor.hideSubscriptionButton) {
 		Data::AmPremiumValue(
 			session
-		) | rpl::skip(1) | rpl::start_with_next([=] {
+		) | rpl::skip(1) | rpl::on_next([=] {
 			box->closeBox();
 		}, box->lifetime());
 	}
 
 	if (const auto &hidden = descriptor.hiddenCallback) {
-		box->boxClosing() | rpl::start_with_next(hidden, box->lifetime());
+		box->boxClosing() | rpl::on_next(hidden, box->lifetime());
 	}
 
 	if (session->premium() || descriptor.hideSubscriptionButton) {
@@ -1245,7 +1323,7 @@ void DecorateListPromoBox(
 
 		box->setStyle(st::premiumPreviewDoubledLimitsBox);
 		box->widthValue(
-		) | rpl::start_with_next([=](int width) {
+		) | rpl::on_next([=](int width) {
 			const auto &padding
 				= st::premiumPreviewDoubledLimitsBox.buttonPadding;
 			button->resizeToWidth(width
@@ -1393,7 +1471,7 @@ void PremiumUnavailableBox(not_null<Ui::GenericBox*> box) {
 	Ui::ConfirmBox(box, {
 		.text = tr::lng_premium_unavailable(
 			tr::now,
-			Ui::Text::RichLangValue),
+			tr::rich),
 		.inform = true,
 	});
 }
@@ -1412,7 +1490,7 @@ void DoubledLimitsPreviewBox(
 			tr::lng_premium_double_limits_about_channels(
 				lt_count,
 				rpl::single(float64(premium)),
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.channelsDefault(),
 			premium,
 		});
@@ -1424,7 +1502,7 @@ void DoubledLimitsPreviewBox(
 			tr::lng_premium_double_limits_about_pins(
 				lt_count,
 				rpl::single(float64(premium)),
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.dialogsPinnedDefault(),
 			premium,
 		});
@@ -1436,7 +1514,7 @@ void DoubledLimitsPreviewBox(
 			tr::lng_premium_double_limits_about_links(
 				lt_count,
 				rpl::single(float64(premium)),
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.channelsPublicDefault(),
 			premium,
 		});
@@ -1448,7 +1526,7 @@ void DoubledLimitsPreviewBox(
 			tr::lng_premium_double_limits_about_gifs(
 				lt_count,
 				rpl::single(float64(premium)),
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.gifsDefault(),
 			premium,
 		});
@@ -1460,7 +1538,7 @@ void DoubledLimitsPreviewBox(
 			tr::lng_premium_double_limits_about_stickers(
 				lt_count,
 				rpl::single(float64(premium)),
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.stickersFavedDefault(),
 			premium,
 		});
@@ -1470,7 +1548,7 @@ void DoubledLimitsPreviewBox(
 		entries.push_back({
 			tr::lng_premium_double_limits_subtitle_bio(),
 			tr::lng_premium_double_limits_about_bio(
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.aboutLengthDefault(),
 			premium,
 		});
@@ -1480,7 +1558,7 @@ void DoubledLimitsPreviewBox(
 		entries.push_back({
 			tr::lng_premium_double_limits_subtitle_captions(),
 			tr::lng_premium_double_limits_about_captions(
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.captionLengthDefault(),
 			premium,
 		});
@@ -1492,7 +1570,7 @@ void DoubledLimitsPreviewBox(
 			tr::lng_premium_double_limits_about_folders(
 				lt_count,
 				rpl::single(float64(premium)),
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.dialogFiltersDefault(),
 			premium,
 		});
@@ -1504,7 +1582,7 @@ void DoubledLimitsPreviewBox(
 			tr::lng_premium_double_limits_about_folder_chats(
 				lt_count,
 				rpl::single(float64(premium)),
-				Ui::Text::RichLangValue),
+				tr::rich),
 			limits.dialogFiltersChatsDefault(),
 			premium,
 		});
@@ -1524,6 +1602,18 @@ void DoubledLimitsPreviewBox(
 		Main::Domain::kPremiumMaxAccounts,
 		till,
 	});
+	{
+		const auto premium = limits.similarChannelsPremium();
+		entries.push_back({
+			tr::lng_premium_double_limits_subtitle_similar_channels(),
+			tr::lng_premium_double_limits_about_similar_channels(
+				lt_count,
+				rpl::single(float64(premium)),
+				tr::rich),
+			limits.similarChannelsDefault(),
+			premium,
+		});
+	}
 	Ui::Premium::ShowListBox(
 		box,
 		st::defaultPremiumLimits,
@@ -1644,6 +1734,11 @@ void TelegramBusinessPreviewBox(
 			tr::lng_business_about_chat_links,
 			st::settingsBusinessPromoChatLinks);
 			break;
+		case PremiumFeature::FilterTags: push(
+			tr::lng_premium_summary_subtitle_filter_tags,
+			tr::lng_premium_summary_about_filter_tags,
+			st::settingsPremiumIconTags);
+			break;
 		}
 	}
 
@@ -1668,7 +1763,7 @@ object_ptr<Ui::GradientButton> CreateUnlockButton(
 	rpl::combine(
 		result->widthValue(),
 		label->widthValue()
-	) | rpl::start_with_next([=](int outer, int width) {
+	) | rpl::on_next([=](int outer, int width) {
 		label->moveToLeft(
 			(outer - width) / 2,
 			st::premiumPreviewBox.button.textTop,

@@ -10,10 +10,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/flat_map.h"
 #include "base/weak_ptr.h"
 #include "base/flags.h"
-#include "dialogs/dialogs_key.h"
+#include "dialogs/dialogs_common.h"
 #include "ui/unread_badge.h"
 
 class HistoryItem;
+class History;
 class UserData;
 
 namespace Main {
@@ -26,6 +27,8 @@ class Forum;
 class Folder;
 class ForumTopic;
 class SavedSublist;
+class SavedMessages;
+class Thread;
 } // namespace Data
 
 namespace Ui {
@@ -39,112 +42,32 @@ struct PaintContext;
 
 namespace Dialogs {
 
+struct UnreadState;
 class Row;
 class IndexedList;
 class MainList;
-
-struct RowsByLetter {
-	not_null<Row*> main;
-	base::flat_map<QChar, not_null<Row*>> letters;
-};
-
-enum class SortMode {
-	Date    = 0x00,
-	Name    = 0x01,
-	Add     = 0x02,
-};
-
-struct PositionChange {
-	int from = -1;
-	int to = -1;
-	int height = 0;
-};
-
-struct UnreadState {
-	int messages = 0;
-	int messagesMuted = 0;
-	int chats = 0;
-	int chatsMuted = 0;
-	int marks = 0;
-	int marksMuted = 0;
-	int reactions = 0;
-	int reactionsMuted = 0;
-	int mentions = 0;
-	bool known = false;
-
-	UnreadState &operator+=(const UnreadState &other) {
-		messages += other.messages;
-		messagesMuted += other.messagesMuted;
-		chats += other.chats;
-		chatsMuted += other.chatsMuted;
-		marks += other.marks;
-		marksMuted += other.marksMuted;
-		reactions += other.reactions;
-		reactionsMuted += other.reactionsMuted;
-		mentions += other.mentions;
-		return *this;
-	}
-	UnreadState &operator-=(const UnreadState &other) {
-		messages -= other.messages;
-		messagesMuted -= other.messagesMuted;
-		chats -= other.chats;
-		chatsMuted -= other.chatsMuted;
-		marks -= other.marks;
-		marksMuted -= other.marksMuted;
-		reactions -= other.reactions;
-		reactionsMuted -= other.reactionsMuted;
-		mentions -= other.mentions;
-		return *this;
-	}
-};
-
-inline UnreadState operator+(const UnreadState &a, const UnreadState &b) {
-	auto result = a;
-	result += b;
-	return result;
-}
-
-inline UnreadState operator-(const UnreadState &a, const UnreadState &b) {
-	auto result = a;
-	result -= b;
-	return result;
-}
-
-struct BadgesState {
-	int unreadCounter = 0;
-	bool unread : 1 = false;
-	bool unreadMuted : 1 = false;
-	bool mention : 1 = false;
-	bool mentionMuted : 1 = false;
-	bool reaction : 1 = false;
-	bool reactionMuted : 1 = false;
-
-	friend inline constexpr auto operator<=>(
-		BadgesState,
-		BadgesState) = default;
-
-	[[nodiscard]] bool empty() const {
-		return !unread && !mention && !reaction;
-	}
-};
-
-enum class CountInBadge : uchar {
-	Default,
-	Chats,
-	Messages,
-};
-
-enum class IncludeInBadge : uchar {
-	Default,
-	Unmuted,
-	All,
-	UnmutedOrAll,
-};
 
 [[nodiscard]] BadgesState BadgesForUnread(
 	const UnreadState &state,
 	CountInBadge count = CountInBadge::Default,
 	IncludeInBadge include = IncludeInBadge::Default);
+
+struct DateTextCache {
+	QString text;
+	TimeId messageTimeId = 0;
+	int todaySerial = 0;
+	int width = 0;
+};
+
+struct DateText {
+	const QString &text;
+	int width = 0;
+};
+
+[[nodiscard]] DateText ResolveDateText(
+	DateTextCache &cache,
+	TimeId date,
+	crl::time now);
 
 class Entry : public base::has_weak_ptr {
 public:
@@ -186,6 +109,7 @@ public:
 	not_null<Row*> addToChatList(
 		FilterId filterId,
 		not_null<MainList*> list);
+	void setColorIndexForFilterId(FilterId, std::optional<uint8>);
 	void removeFromChatList(
 		FilterId filterId,
 		not_null<MainList*> list);
@@ -247,10 +171,14 @@ public:
 	}
 
 	[[nodiscard]] const Ui::Text::String &chatListNameText() const;
+	[[nodiscard]] DateText chatListTimestampText(
+		TimeId date,
+		crl::time now) const;
 	[[nodiscard]] Ui::PeerBadge &chatListPeerBadge() const {
 		return _chatListPeerBadge;
 	}
 
+	[[nodiscard]] bool hasChatsFilterTags(FilterId exclude) const;
 protected:
 	void notifyUnreadStateChange(const UnreadState &wasState);
 	inline auto unreadStateChangeNotifier(bool required);
@@ -261,9 +189,10 @@ private:
 	enum class Flag : uchar {
 		IsThread = (1 << 0),
 		IsHistory = (1 << 1),
-		IsSavedSublist = (1 << 2),
-		UpdatePostponed = (1 << 3),
-		InUnreadChangeBlock = (1 << 4),
+		IsForumTopic = (1 << 2),
+		IsSavedSublist = (1 << 3),
+		UpdatePostponed = (1 << 4),
+		InUnreadChangeBlock = (1 << 5),
 	};
 	friend inline constexpr bool is_flag_type(Flag) { return true; }
 	using Flags = base::flags<Flag>;
@@ -281,9 +210,11 @@ private:
 	uint64 _sortKeyInChatList = 0;
 	uint64 _sortKeyByDate = 0;
 	base::flat_map<FilterId, int> _pinnedIndex;
+	base::flat_map<FilterId, uint8> _tagColors;
 	mutable Ui::PeerBadge _chatListPeerBadge;
 	mutable Ui::Text::String _chatListNameText;
 	mutable int _chatListNameVersion = 0;
+	mutable DateTextCache _chatListDateCache;
 	TimeId _timeId = 0;
 	Flags _flags;
 
@@ -295,7 +226,7 @@ auto Entry::unreadStateChangeNotifier(bool required) {
 	_flags |= Flag::InUnreadChangeBlock;
 	const auto notify = required && inChatList();
 	const auto wasState = notify ? chatListUnreadState() : UnreadState();
-	return gsl::finally([=] {
+	return gsl::finally([=, this] {
 		_flags &= ~Flag::InUnreadChangeBlock;
 		if (notify) {
 			Assert(inChatList());

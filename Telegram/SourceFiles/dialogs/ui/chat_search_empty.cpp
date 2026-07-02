@@ -50,7 +50,7 @@ void SearchEmpty::setup(Icon icon, rpl::producer<TextWithEntities> text) {
 		st::recentPeersEmptyMargin);
 	const auto animated = widget.data();
 
-	sizeValue() | rpl::start_with_next([=](QSize size) {
+	sizeValue() | rpl::on_next([=](QSize size) {
 		const auto padding = st::recentPeersEmptyMargin;
 		const auto paddings = padding.left() + padding.right();
 		label->resizeToWidth(size.width() - paddings);
@@ -61,6 +61,13 @@ void SearchEmpty::setup(Icon icon, rpl::producer<TextWithEntities> text) {
 		animated->move(x, y - sub);
 		label->move((size.width() - label->width()) / 2, top - sub);
 	}, lifetime());
+
+	label->setClickHandlerFilter([=](
+			const ClickHandlerPtr &handler,
+			Qt::MouseButton) {
+		_handlerActivated.fire_copy(handler);
+		return false;
+	});
 
 	_animate = [animate] {
 		animate(anim::repeat::once);

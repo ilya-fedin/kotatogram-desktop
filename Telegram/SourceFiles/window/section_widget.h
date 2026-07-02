@@ -17,8 +17,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class PeerData;
 
 namespace ChatHelpers {
+struct FileChosen;
 class Show;
 } // namespace ChatHelpers
+
+namespace SendMenu {
+struct Details;
+} // namespace SendMenu
 
 namespace Data {
 struct ReactionId;
@@ -72,6 +77,8 @@ public:
 	virtual bool returnTabbedSelector() {
 		return false;
 	}
+	[[nodiscard]] virtual SendMenu::Details sendMenuDetails() const;
+	virtual bool processChosenSticker(ChatHelpers::FileChosen &&chosen);
 
 private:
 	const not_null<SessionController*> _controller;
@@ -138,6 +145,9 @@ public:
 	virtual bool showInternal(
 		not_null<SectionMemento*> memento,
 		const SectionShow &params) = 0;
+	virtual bool showBackInternal() {
+		return false;
+	}
 	virtual bool sameTypeAs(not_null<SectionMemento*> memento) {
 		return false;
 	}
@@ -148,7 +158,10 @@ public:
 			MsgId messageId) {
 		return false;
 	}
-	virtual bool searchInChatEmbedded(Dialogs::Key chat, QString query) {
+	virtual bool searchInChatEmbedded(
+			QString query,
+			Dialogs::Key chat,
+			PeerData *searchFrom = nullptr) {
 		return false;
 	}
 
@@ -191,6 +204,9 @@ public:
 		return nullptr;
 	}
 
+	virtual void validateSubsectionTabs() {
+	}
+
 	static void PaintBackground(
 		not_null<SessionController*> controller,
 		not_null<Ui::ChatTheme*> theme,
@@ -201,12 +217,14 @@ public:
 		not_null<QWidget*> widget,
 		int fillHeight,
 		int fromy,
-		QRect clip);
+		QRect clip,
+		bool paused = false);
 	static void PaintBackground(
 		QPainter &p,
 		not_null<Ui::ChatTheme*> theme,
 		QSize fill,
-		QRect clip);
+		QRect clip,
+		bool paused = false);
 
 protected:
 	void paintEvent(QPaintEvent *e) override;

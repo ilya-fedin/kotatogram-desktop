@@ -13,6 +13,11 @@ namespace Ui {
 class RippleAnimation;
 } // namespace Ui
 
+namespace Ui::Premium {
+class ColoredMiniStars;
+enum class MiniStarsType;
+} // namespace Ui::Premium
+
 namespace HistoryView {
 
 class ServiceBoxContent {
@@ -22,13 +27,26 @@ public:
 	[[nodiscard]] virtual int width();
 	[[nodiscard]] virtual int top() = 0;
 	[[nodiscard]] virtual QSize size() = 0;
-	[[nodiscard]] virtual QString title() = 0;
+	[[nodiscard]] virtual TextWithEntities title() = 0;
+	[[nodiscard]] virtual TextWithEntities author() {
+		return {};
+	}
 	[[nodiscard]] virtual TextWithEntities subtitle() = 0;
 	[[nodiscard]] virtual int buttonSkip() {
 		return top();
 	}
 	[[nodiscard]] virtual rpl::producer<QString> button() = 0;
-	[[nodiscard]] virtual QString cornerTagText() {
+
+	// For now only subtitle() changes are observed.
+	[[nodiscard]] virtual rpl::producer<> changes() {
+		return nullptr;
+	}
+
+	[[nodiscard]] virtual auto buttonMinistars()
+	-> std::optional<Ui::Premium::MiniStarsType> {
+		return std::nullopt;
+	}
+	[[nodiscard]] virtual QImage cornerTag(const PaintContext &context) {
 		return {};
 	}
 	virtual void draw(
@@ -36,6 +54,9 @@ public:
 		const PaintContext &context,
 		const QRect &geometry) = 0;
 	[[nodiscard]] virtual ClickHandlerPtr createViewLink() = 0;
+	[[nodiscard]] virtual ClickHandlerPtr authorLink() {
+		return nullptr;
+	}
 
 	[[nodiscard]] virtual bool hideServiceText() = 0;
 
@@ -90,6 +111,8 @@ private:
 	[[nodiscard]] QRect buttonRect() const;
 	[[nodiscard]] QRect contentRect() const;
 
+	void applyContentChanges();
+
 	const not_null<Element*> _parent;
 	const std::unique_ptr<ServiceBoxContent> _content;
 	mutable ClickHandlerPtr _contentLink;
@@ -106,15 +129,18 @@ private:
 
 		ClickHandlerPtr link;
 		std::unique_ptr<Ui::RippleAnimation> ripple;
+		std::unique_ptr<Ui::Premium::ColoredMiniStars> stars;
+		std::unique_ptr<QColor> lastFg;
 
 		mutable QPoint lastPoint;
 	} _button;
 
 	const int _maxWidth = 0;
 	Ui::Text::String _title;
+	Ui::Text::String _author;
 	Ui::Text::String _subtitle;
-	const QSize _size;
-	const QSize _innerSize;
+	QSize _size;
+	QSize _innerSize;
 	rpl::lifetime _lifetime;
 
 };

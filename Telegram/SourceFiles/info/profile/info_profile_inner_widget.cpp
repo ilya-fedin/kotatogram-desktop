@@ -7,46 +7,142 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/profile/info_profile_inner_widget.h"
 
-#include "info/info_memento.h"
 #include "info/info_controller.h"
+#include "info/info_memento.h"
 #include "info/profile/info_profile_widget.h"
-#include "info/profile/info_profile_text.h"
-#include "info/profile/info_profile_values.h"
-#include "info/profile/info_profile_cover.h"
 #include "info/profile/info_profile_icon.h"
 #include "info/profile/info_profile_members.h"
+#include "info/profile/info_profile_music_button.h"
+#include "info/profile/info_profile_top_bar.h"
 #include "info/profile/info_profile_actions.h"
 #include "info/media/info_media_buttons.h"
-#include "boxes/abstract_box.h"
-#include "boxes/add_contact_box.h"
+#include "info/saved/info_saved_music_widget.h"
 #include "data/data_changes.h"
+#include "data/data_channel.h"
+#include "data/data_document.h"
 #include "data/data_forum_topic.h"
+#include "data/data_peer.h"
 #include "data/data_photo.h"
 #include "data/data_file_origin.h"
-#include "ui/boxes/confirm_box.h"
-#include "mainwidget.h"
+#include "data/data_user.h"
+#include "data/data_saved_music.h"
+#include "data/data_saved_sublist.h"
+#include "info/saved/info_saved_music_common.h"
+#include "info_profile_actions.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
-#include "window/main_window.h"
-#include "window/window_session_controller.h"
-#include "storage/storage_shared_media.h"
 #include "lang/lang_keys.h"
+#include "ui/text/custom_emoji_helper.h"
+#include "ui/text/format_song_document_name.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
+#include "ui/widgets/labels.h"
 #include "ui/widgets/scroll_area.h"
 #include "ui/widgets/shadow.h"
-#include "ui/widgets/box_content_divider.h"
-#include "ui/wrap/slide_wrap.h"
+#include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/wrap/slide_wrap.h"
+#include "ui/painter.h"
+#include "ui/vertical_list.h"
 #include "ui/ui_utility.h"
-#include "data/data_channel.h"
-#include "data/data_shared_media.h"
 #include "styles/style_info.h"
-#include "styles/style_boxes.h"
 
 namespace Info {
 namespace Profile {
+
+namespace {
+
+void AddSavedMusic(
+		not_null<Ui::VerticalLayout*> layout,
+		not_null<Controller*> controller,
+		not_null<PeerData*> peer,
+		rpl::producer<std::optional<QColor>> topBarColor) {
+	const auto wrap = layout->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			layout,
+			object_ptr<Ui::VerticalLayout>(layout)));
+	Info::Saved::SetupSavedMusic(
+		wrap->entity(),
+		controller,
+		peer,
+		std::move(topBarColor));
+	using namespace rpl::mappers;
+	wrap->toggleOn(
+		wrap->entity()->heightValue() | rpl::map(_1 > 0),
+		anim::type::instant);
+}
+
+void AddUnofficialSecurityRiskWarning(
+		not_null<Ui::VerticalLayout*> layout,
+		not_null<UserData*> user) {
+	const auto wrap = layout->add(
+		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+			layout,
+			object_ptr<Ui::VerticalLayout>(layout)));
+	const auto content = wrap->entity();
+	user->session().changes().peerFlagsValue(
+		user,
+		Data::PeerUpdate::Flag::FullInfo
+	) | rpl::on_next([=] {
+		while (content->count()) {
+			delete content->widgetAt(0);
+		}
+		if (user->unofficialSecurityRisk()) {
+			auto helper = Ui::Text::CustomEmojiHelper();
+			auto icon = helper.paletteDependent({
+				.factory = [] {
+					const auto s = st::infoSecurityRiskIconSize;
+					const auto ratio = style::DevicePixelRatio();
+					const auto rect = QRect(0, 0, s, s);
+					auto result = QImage(
+						rect.size() * ratio,
+						QImage::Format_ARGB32_Premultiplied);
+					result.setDevicePixelRatio(ratio);
+					result.fill(Qt::transparent);
+
+					auto p = QPainter(&result);
+					auto hq = PainterHighQualityEnabler(p);
+					p.setPen(Qt::NoPen);
+					p.setBrush(st::attentionButtonFg);
+					p.drawEllipse(rect);
+
+					p.setPen(st::windowFgActive);
+					p.setFont(st::semiboldFont);
+					p.drawText(rect, u"!"_q, style::al_center);
+
+					p.end();
+					return result;
+				},
+				.margin = st::infoSecurityRiskIconMargin,
+			});
+			auto label = object_ptr<Ui::FlatLabel>(
+				content,
+				tr::lng_profile_unofficial_warning(
+					lt_icon,
+					rpl::single(std::move(icon)),
+					lt_name,
+					rpl::single(TextWithEntities{ user->firstName }),
+					tr::marked),
+				st::defaultDividerLabel.label,
+				st::defaultPopupMenu,
+				helper.context([=] { content->update(); }));
+			content->add(object_ptr<Ui::DividerLabel>(
+				content,
+				std::move(label),
+				st::defaultBoxDividerLabelPadding,
+				st::defaultDividerLabel.bar,
+				RectParts()));
+		}
+		content->resizeToWidth(content->width());
+	}, content->lifetime());
+	using namespace rpl::mappers;
+	wrap->toggleOn(
+		content->heightValue() | rpl::map(_1 > 0),
+		anim::type::instant);
+}
+
+} // namespace
 
 InnerWidget::InnerWidget(
 	QWidget *parent,
@@ -57,9 +153,10 @@ InnerWidget::InnerWidget(
 , _peer(_controller->key().peer())
 , _migrated(_controller->migrated())
 , _topic(_controller->key().topic())
+, _sublist(_controller->key().sublist())
 , _content(setupContent(this, origin)) {
 	_content->heightValue(
-	) | rpl::start_with_next([this](int height) {
+	) | rpl::on_next([this](int height) {
 		if (!_inResize) {
 			resizeToWidth(width());
 			updateDesiredHeight();
@@ -67,15 +164,18 @@ InnerWidget::InnerWidget(
 	}, lifetime());
 }
 
+rpl::producer<> InnerWidget::backRequest() const {
+	return _backClicks.events();
+}
+
 object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 		not_null<RpWidget*> parent,
 		Origin origin) {
-	auto result = object_ptr<Ui::VerticalLayout>(parent);
 	if (const auto user = _peer->asUser()) {
 		user->session().changes().peerFlagsValue(
 			user,
 			Data::PeerUpdate::Flag::FullInfo
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			auto &photos = user->session().api().peerPhoto();
 			if (const auto original = photos.nonPersonalPhoto(user)) {
 				// Preload it for the edit contact box.
@@ -85,66 +185,94 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 			}
 		}, lifetime());
 	}
-	_cover = _topic
-		? result->add(object_ptr<Cover>(
-			result,
-			_controller->parentController(),
-			_topic))
-		: result->add(object_ptr<Cover>(
-			result,
-			_controller->parentController(),
-			_peer));
-	_cover->showSection(
-	) | rpl::start_with_next([=](Section section) {
-		_controller->showSection(_topic
-			? std::make_shared<Info::Memento>(_topic, section)
-			: std::make_shared<Info::Memento>(_peer, section));
-	}, _cover->lifetime());
-	_cover->setOnlineCount(rpl::single(0));
-	if (_topic) {
-		if (_topic->creating()) {
-			return result;
-		}
-		result->add(SetupDetails(_controller, parent, _topic));
-	} else {
-		result->add(SetupDetails(_controller, parent, _peer, origin));
+
+	auto result = object_ptr<Ui::VerticalLayout>(parent);
+
+	const auto musicPeer = _sublist
+		? _sublist->sublistPeer().get()
+		: _peer.get();
+	AddSavedMusic(
+		result.data(),
+		_controller,
+		musicPeer,
+		_topBarColor.value());
+	if (const auto user = _peer->asUser()) {
+		AddUnofficialSecurityRiskWarning(result.data(), user);
 	}
+
+	auto stack = SectionStack(result.data());
+	if (_topic && _topic->creating()) {
+		stack.finalize();
+		return result;
+	}
+
+	BuildProfileDetailsSections(
+		stack,
+		_controller,
+		_peer,
+		_topic,
+		_sublist,
+		origin);
+
 	if (auto manage = SetupManage(_controller, result.data(), _peer)) {
 		result->add(object_ptr<Ui::BoxContentDivider>(result));
 		result->add(std::move(manage));
 	}
-	result->add(setupSharedMedia(result.data()));
-	if (_topic) {
+
+	auto sharedTracker = Ui::MultiSlideTracker();
+	{
+		auto sharedMediaWidget = setupSharedMedia(
+			result.data(),
+			sharedTracker);
+		const auto raw = sharedMediaWidget.data();
+		_sharedMediaWrap = raw;
+		stack.addPlainSeparator();
+		stack.add(Section{
+			.widget = std::move(sharedMediaWidget),
+			.shown = raw->toggledValue(),
+		});
+	}
+	if (_topic || _sublist) {
+		stack.finalize();
 		return result;
 	}
-	{
-		auto buttons = SetupChannelMembersAndManage(
+	if (auto manage = SetupChannelMembersAndManage(
 			_controller,
 			result.data(),
-			_peer);
-		if (buttons) {
-			result->add(std::move(buttons));
-		}
+			_peer)) {
+		const auto raw = static_cast<Ui::SlideWrap<Ui::RpWidget>*>(
+			manage.data());
+		stack.addPlainSeparator();
+		stack.add(Section{
+			.widget = std::move(manage),
+			.shown = raw->toggledValue(),
+		});
 	}
 	if (auto actions = SetupActions(_controller, result.data(), _peer)) {
-		result->add(object_ptr<Ui::BoxContentDivider>(result));
-		result->add(std::move(actions));
+		stack.addPlainSeparator();
+		stack.add(Section{
+			.widget = std::move(actions),
+			.shown = rpl::single(true),
+		});
 	}
-	if (_peer->isChat() || _peer->isMegagroup()) {
-		setupMembers(result.data());
+	if ((_peer->isChat() || _peer->isMegagroup())
+		&& !_peer->isMonoforum()) {
+		stack.addPlainSeparator();
+		stack.add(makeMembersSection(result.data()));
 	}
+	stack.finalize();
 	return result;
 }
 
-void InnerWidget::setupMembers(not_null<Ui::VerticalLayout*> container) {
-	auto wrap = container->add(object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
-		container,
-		object_ptr<Ui::VerticalLayout>(container)));
-	const auto inner = wrap->entity();
-	inner->add(object_ptr<Ui::BoxContentDivider>(inner));
+Section InnerWidget::makeMembersSection(not_null<QWidget*> parent) {
+	auto wrap = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
+		parent,
+		object_ptr<Ui::VerticalLayout>(parent));
+	const auto raw = wrap.data();
+	const auto inner = raw->entity();
 	_members = inner->add(object_ptr<Members>(inner, _controller));
 	_members->scrollToRequests(
-	) | rpl::start_with_next([this](Ui::ScrollToRequest request) {
+	) | rpl::on_next([this](Ui::ScrollToRequest request) {
 		auto min = (request.ymin < 0)
 			? request.ymin
 			: MapFrom(this, _members, QPoint(0, request.ymin)).y();
@@ -155,29 +283,39 @@ void InnerWidget::setupMembers(not_null<Ui::VerticalLayout*> container) {
 			: MapFrom(this, _members, QPoint(0, request.ymax)).y();
 		_scrollToRequests.fire({ min, max });
 	}, _members->lifetime());
-	_cover->setOnlineCount(_members->onlineCountValue());
+	_members->onlineCountValue(
+	) | rpl::on_next([=](int count) {
+		_onlineCount.fire_copy(count);
+	}, _members->lifetime());
 
 	using namespace rpl::mappers;
-	wrap->toggleOn(
+	raw->toggleOn(
 		_members->fullCountValue() | rpl::map(_1 > 0),
 		anim::type::instant);
+	return Section{
+		.widget = std::move(wrap),
+		.shown = raw->toggledValue(),
+	};
 }
 
-object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
-		not_null<RpWidget*> parent) {
+object_ptr<Ui::SlideWrap<Ui::RpWidget>> InnerWidget::setupSharedMedia(
+		not_null<RpWidget*> parent,
+		Ui::MultiSlideTracker &sharedTracker) {
 	using namespace rpl::mappers;
 	using MediaType = Media::Type;
 
+	const auto peer = _sublist ? _sublist->sublistPeer() : _peer;
 	auto content = object_ptr<Ui::VerticalLayout>(parent);
-	auto tracker = Ui::MultiSlideTracker();
+	auto &tracker = sharedTracker;
 	auto addMediaButton = [&](
 			MediaType type,
 			const style::icon &icon) {
 		auto result = Media::AddButton(
 			content,
 			_controller,
-			_peer,
-			_topic ? _topic->rootId() : 0,
+			peer,
+			_topic ? _topic->rootId() : MsgId(),
+			_sublist ? _sublist->sublistPeer()->id : PeerId(),
 			_migrated,
 			type,
 			tracker);
@@ -199,13 +337,13 @@ object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
 			icon,
 			st::infoSharedMediaButtonIconPosition);
 	};
-	const auto addSimilarChannelsButton = [&](
-			not_null<ChannelData*> channel,
+	const auto addSimilarPeersButton = [&](
+			not_null<PeerData*> peer,
 			const style::icon &icon) {
-		auto result = Media::AddSimilarChannelsButton(
+		auto result = Media::AddSimilarPeersButton(
 			content,
 			_controller,
-			channel,
+			peer,
 			tracker);
 		object_ptr<Profile::FloatingIcon>(
 			result,
@@ -242,12 +380,12 @@ object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
 			st::infoSharedMediaButtonIconPosition);
 	};
 	auto addPeerGiftsButton = [&](
-			not_null<UserData*> user,
+			not_null<PeerData*> peer,
 			const style::icon &icon) {
 		auto result = Media::AddPeerGiftsButton(
 			content,
 			_controller,
-			user,
+			peer,
 			tracker);
 		object_ptr<Profile::FloatingIcon>(
 			result,
@@ -256,23 +394,25 @@ object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
 	};
 
 	if (!_topic) {
-		addStoriesButton(_peer, st::infoIconMediaStories);
-		if (const auto user = _peer->asUser()) {
-			addPeerGiftsButton(user, st::infoIconMediaGifts);
-		}
-		addSavedSublistButton(_peer, st::infoIconMediaSaved);
+		addStoriesButton(peer, st::infoIconMediaStories);
+		addPeerGiftsButton(peer, st::infoIconMediaGifts);
+		addSavedSublistButton(peer, st::infoIconMediaSaved);
 	}
 	addMediaButton(MediaType::Photo, st::infoIconMediaPhoto);
 	addMediaButton(MediaType::Video, st::infoIconMediaVideo);
 	addMediaButton(MediaType::File, st::infoIconMediaFile);
 	addMediaButton(MediaType::MusicFile, st::infoIconMediaAudio);
 	addMediaButton(MediaType::Link, st::infoIconMediaLink);
+	addMediaButton(MediaType::Poll, st::infoIconMediaPoll);
 	addMediaButton(MediaType::RoundVoiceFile, st::infoIconMediaVoice);
 	addMediaButton(MediaType::GIF, st::infoIconMediaGif);
-	if (const auto user = _peer->asUser()) {
+	if (const auto bot = peer->asBot()) {
+		addCommonGroupsButton(bot, st::infoIconMediaGroup);
+		addSimilarPeersButton(bot, st::infoIconMediaBot);
+	} else if (const auto channel = peer->asBroadcast()) {
+		addSimilarPeersButton(channel, st::infoIconMediaChannel);
+	} else if (const auto user = peer->asUser()) {
 		addCommonGroupsButton(user, st::infoIconMediaGroup);
-	} else if (const auto channel = _peer->asChannel()) {
-		addSimilarChannelsButton(channel, st::infoIconMediaChannel);
 	}
 
 	auto result = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
@@ -288,18 +428,8 @@ object_ptr<Ui::RpWidget> InnerWidget::setupSharedMedia(
 
 	auto layout = result->entity();
 
-	layout->add(object_ptr<Ui::BoxContentDivider>(layout));
-	layout->add(object_ptr<Ui::FixedHeightWidget>(
-		layout,
-		st::infoSharedMediaBottomSkip)
-	)->setAttribute(Qt::WA_TransparentForMouseEvents);
 	layout->add(std::move(content));
-	layout->add(object_ptr<Ui::FixedHeightWidget>(
-		layout,
-		st::infoSharedMediaBottomSkip)
-	)->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-	_sharedMediaWrap = result;
 	return result;
 }
 
@@ -346,6 +476,42 @@ int InnerWidget::resizeGetHeight(int newWidth) {
 	_content->moveToLeft(0, 0);
 	updateDesiredHeight();
 	return _content->heightNoMargins();
+}
+
+void InnerWidget::enableBackButton() {
+	_backToggles.force_assign(true);
+}
+
+void InnerWidget::showFinished() {
+	_showFinished.fire({});
+}
+
+bool InnerWidget::hasFlexibleTopBar() const {
+	return true;
+}
+
+base::weak_qptr<Ui::RpWidget> InnerWidget::createPinnedToTop(
+		not_null<Ui::RpWidget*> parent) {
+	const auto content = Ui::CreateChild<TopBar>(
+		parent,
+		TopBar::Descriptor{
+			.controller = _controller->parentController(),
+			.key = _controller->key(),
+			.wrap = _controller->wrapValue(),
+			.peer = _sublist ? _sublist->sublistPeer().get() : nullptr,
+			.backToggles = _backToggles.value(),
+			.showFinished = _showFinished.events(),
+		});
+	content->backRequest(
+	) | rpl::start_to_stream(_backClicks, content->lifetime());
+	content->setOnlineCount(_onlineCount.events());
+	_topBarColor = content->edgeColor();
+	return base::make_weak(not_null<Ui::RpWidget*>{ content });
+}
+
+base::weak_qptr<Ui::RpWidget> InnerWidget::createPinnedToBottom(
+		not_null<Ui::RpWidget*> parent) {
+	return nullptr;
 }
 
 } // namespace Profile

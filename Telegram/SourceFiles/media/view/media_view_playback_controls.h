@@ -9,8 +9,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/rp_widget.h"
 #include "base/object_ptr.h"
+#include "media/media_common.h"
 
 namespace Ui {
+class CrossFadeLabel;
 class LabelSimple;
 class FadeAnimation;
 class IconButton;
@@ -18,14 +20,13 @@ class MediaSlider;
 class PopupMenu;
 } // namespace Ui
 
-namespace Media {
-namespace Player {
+namespace Media::Player {
 struct TrackState;
-class SpeedButton;
+class SettingsButton;
 class SpeedController;
-} // namespace Player
+} // namespace Media::Player
 
-namespace View {
+namespace Media::View {
 
 class PlaybackProgress;
 
@@ -44,10 +45,21 @@ public:
 		virtual void playbackControlsSpeedChanged(float64 speed) = 0;
 		[[nodiscard]] virtual float64 playbackControlsCurrentSpeed(
 			bool lastNonDefault) = 0;
+		[[nodiscard]] virtual auto playbackControlsQualities()
+			-> std::vector<Media::VideoQuality> = 0;
+		[[nodiscard]] virtual auto playbackControlsCurrentQuality()
+			-> VideoQuality = 0;
+		virtual void playbackControlsQualityChanged(
+			Media::VideoQuality quality) = 0;
 		virtual void playbackControlsToFullScreen() = 0;
 		virtual void playbackControlsFromFullScreen() = 0;
 		virtual void playbackControlsToPictureInPicture() = 0;
 		virtual void playbackControlsRotate() = 0;
+	};
+
+	struct TimestampData {
+		float64 position = 0.;
+		QString label;
 	};
 
 	PlaybackControls(QWidget *parent, not_null<Delegate*> delegate);
@@ -58,7 +70,15 @@ public:
 
 	void updatePlayback(const Player::TrackState &state);
 	void setLoadingProgress(int64 ready, int64 total);
+	void setTimestamps(std::vector<TimestampData> timestamps);
 	void setInFullScreen(bool inFullScreen);
+	void updatePlaybackSpeed(float64 speed);
+	void updateSpeedToggleQuality();
+	[[nodiscard]] bool hasTimestamps() const;
+	[[nodiscard]] std::optional<TimestampData> nextTimestamp(
+		float64 progress) const;
+	[[nodiscard]] std::optional<TimestampData> prevTimestamp(
+		float64 progress) const;
 	[[nodiscard]] bool hasMenu() const;
 	[[nodiscard]] bool dragging() const;
 
@@ -79,7 +99,6 @@ private:
 	[[nodiscard]] float64 countDownloadedTillPercent(
 		const Player::TrackState &state) const;
 
-	void updatePlaybackSpeed(float64 speed);
 	void updateVolumeToggleIcon();
 	void updateDownloadProgressPosition();
 
@@ -90,7 +109,13 @@ private:
 	[[nodiscard]] float64 speedLookup(bool lastNonDefault) const;
 	void saveSpeed(float64 speed);
 
+	void saveQuality(Media::VideoQuality quality);
+	void updateTimestampLabel();
+
 	const not_null<Delegate*> _delegate;
+
+	bool _speedControllable = false;
+	std::vector<Media::VideoQuality> _qualitiesList;
 
 	bool _inFullScreen = false;
 	bool _showPause = false;
@@ -108,16 +133,18 @@ private:
 	std::unique_ptr<PlaybackProgress> _receivedTillProgress;
 	object_ptr<Ui::IconButton> _volumeToggle;
 	object_ptr<Ui::MediaSlider> _volumeController;
-	object_ptr<Player::SpeedButton> _speedToggle;
+	object_ptr<Player::SettingsButton> _speedToggle;
 	object_ptr<Ui::IconButton> _fullScreenToggle;
 	object_ptr<Ui::IconButton> _pictureInPicture;
 	object_ptr<Ui::LabelSimple> _playedAlready;
 	object_ptr<Ui::LabelSimple> _toPlayLeft;
 	object_ptr<Ui::LabelSimple> _downloadProgress = { nullptr };
+	object_ptr<Ui::CrossFadeLabel> _timestampLabel = { nullptr };
+	std::vector<TimestampData> _timestamps;
+	int _currentTimestampIndex = -1;
 	std::unique_ptr<Player::SpeedController> _speedController;
 	std::unique_ptr<Ui::FadeAnimation> _fadeAnimation;
 
 };
 
-} // namespace View
-} // namespace Media
+} // namespace Media::View

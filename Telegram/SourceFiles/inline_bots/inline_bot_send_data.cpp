@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_text_entities.h"
 #include "data/data_document.h"
 #include "inline_bots/inline_bot_result.h"
+#include "iv/iv_rich_page.h"
 #include "storage/localstorage.h"
 #include "lang/lang_keys.h"
 #include "history/history.h"
@@ -28,7 +29,7 @@ QString SendData::getLayoutDescription(const Result *owner) const {
 	return owner->_description;
 }
 
-void SendDataCommon::addToHistory(
+not_null<HistoryItem*> SendDataCommon::makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const {
@@ -36,21 +37,61 @@ void SendDataCommon::addToHistory(
 	if (fields.replyTo) {
 		fields.flags |= MessageFlag::HasReplyInfo;
 	}
-	history->addNewLocalMessage(
+	return history->makeMessage(
 		std::move(fields),
 		std::move(distinct.text),
 		std::move(distinct.media));
 }
 
-QString SendDataCommon::getErrorOnSend(
+Data::SendError SendDataCommon::getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const {
 	const auto type = ChatRestriction::SendOther;
-	return Data::RestrictionError(history->peer, type).value_or(QString());
+	return Data::RestrictionError(history->peer, type);
 }
 
 SendDataCommon::SentMessageFields SendText::getSentMessageFields() const {
 	return { .text = { _message, _entities } };
+}
+
+SendRichMessage::SendRichMessage(
+	not_null<Main::Session*> session,
+	const MTPRichMessage &message)
+: SendData(session)
+, _page(Iv::ParseRichPage(session, message))
+, _summary(Iv::FlattenRichPageSummary(_page)) {
+}
+
+bool SendRichMessage::isValid() const {
+	return _page && !_page->blocks.empty();
+}
+
+not_null<HistoryItem*> SendRichMessage::makeMessage(
+		const Result *owner,
+		not_null<History*> history,
+		HistoryItemCommonFields &&fields) const {
+	if (fields.replyTo) {
+		fields.flags |= MessageFlag::HasReplyInfo;
+	}
+	const auto item = history->makeMessage(
+		std::move(fields),
+		_summary,
+		MTP_messageMediaEmpty());
+	item->setRichPage(_page);
+	return item;
+}
+
+Data::SendError SendRichMessage::getErrorOnSend(
+		const Result *owner,
+		not_null<History*> history) const {
+	const auto type = ChatRestriction::SendOther;
+	return Data::RestrictionError(history->peer, type);
+}
+
+QString SendRichMessage::getLayoutDescription(const Result *owner) const {
+	return _summary.text.isEmpty()
+		? SendData::getLayoutDescription(owner)
+		: _summary.text;
 }
 
 SendDataCommon::SentMessageFields SendGeo::getSentMessageFields() const {
@@ -96,52 +137,52 @@ QString SendContact::getLayoutDescription(const Result *owner) const {
 	return result;
 }
 
-void SendPhoto::addToHistory(
+not_null<HistoryItem*> SendPhoto::makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const {
-	history->addNewLocalMessage(
+	return history->makeMessage(
 		std::move(fields),
 		_photo,
-		{ _message, _entities });
+		TextWithEntities{ _message, _entities });
 }
 
-QString SendPhoto::getErrorOnSend(
+Data::SendError SendPhoto::getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const {
 	const auto type = ChatRestriction::SendPhotos;
-	return Data::RestrictionError(history->peer, type).value_or(QString());
+	return Data::RestrictionError(history->peer, type);
 }
 
-void SendFile::addToHistory(
+not_null<HistoryItem*> SendFile::makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const {
-	history->addNewLocalMessage(
+	return history->makeMessage(
 		std::move(fields),
 		_document,
-		{ _message, _entities });
+		TextWithEntities{ _message, _entities });
 }
 
-QString SendFile::getErrorOnSend(
+Data::SendError SendFile::getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const {
 	const auto type = _document->requiredSendRight();
-	return Data::RestrictionError(history->peer, type).value_or(QString());
+	return Data::RestrictionError(history->peer, type);
 }
 
-void SendGame::addToHistory(
+not_null<HistoryItem*> SendGame::makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const {
-	history->addNewLocalMessage(std::move(fields), _game);
+	return history->makeMessage(std::move(fields), _game);
 }
 
-QString SendGame::getErrorOnSend(
+Data::SendError SendGame::getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const {
 	const auto type = ChatRestriction::SendGames;
-	return Data::RestrictionError(history->peer, type).value_or(QString());
+	return Data::RestrictionError(history->peer, type);
 }
 
 SendDataCommon::SentMessageFields SendInvoice::getSentMessageFields() const {

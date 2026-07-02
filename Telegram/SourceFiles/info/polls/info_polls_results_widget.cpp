@@ -13,8 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_poll.h"
 #include "ui/ui_utility.h"
 
-namespace Info {
-namespace Polls {
+namespace Info::Polls {
 
 Memento::Memento(not_null<PollData*> poll, FullMsgId contextId)
 : ContentMemento(poll, contextId) {
@@ -55,11 +54,11 @@ Widget::Widget(QWidget *parent, not_null<Controller*> controller)
 		controller->poll(),
 		controller->pollContextId()))) {
 	_inner->showPeerInfoRequests(
-	) | rpl::start_with_next([=](not_null<PeerData*> peer) {
+	) | rpl::on_next([=](not_null<PeerData*> peer) {
 		controller->showPeerInfo(peer);
 	}, _inner->lifetime());
 	_inner->scrollToRequests(
-	) | rpl::start_with_next([=](const Ui::ScrollToRequest &request) {
+	) | rpl::on_next([=](const Ui::ScrollToRequest &request) {
 		scrollTo(request);
 	}, _inner->lifetime());
 }
@@ -113,5 +112,4 @@ void Widget::restoreState(not_null<Memento*> memento) {
 	scrollTopRestore(memento->scrollTop());
 }
 
-} // namespace Polls
-} // namespace Info
+} // namespace Info::Polls

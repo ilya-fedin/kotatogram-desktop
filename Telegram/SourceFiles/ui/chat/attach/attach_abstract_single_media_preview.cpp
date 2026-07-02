@@ -8,7 +8,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/attach/attach_abstract_single_media_preview.h"
 
 #include "editor/photo_editor_common.h"
-#include "lang/lang_keys.h"
 #include "ui/chat/attach/attach_controls.h"
 #include "ui/chat/attach/attach_prepare.h"
 #include "ui/effects/spoiler_mess.h"
@@ -16,12 +15,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/ui_utility.h"
-#include "ui/widgets/popup_menu.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_layers.h"
-#include "styles/style_menu_icons.h"
 
 namespace Ui {
 namespace {
@@ -33,11 +30,9 @@ constexpr auto kMinPreviewWidth = 20;
 AbstractSingleMediaPreview::AbstractSingleMediaPreview(
 	QWidget *parent,
 	const style::ComposeControls &st,
-	AttachControls::Type type,
-	Fn<bool()> canToggleSpoiler)
+	AttachControls::Type type)
 : AbstractSinglePreview(parent)
 , _st(st)
-, _canToggleSpoiler(std::move(canToggleSpoiler))
 , _minThumbH(st::sendBoxAlbumGroupSize.height()
 	+ st::sendBoxAlbumGroupSkipTop * 2)
 , _controls(base::make_unique_q<AttachControlsWidget>(this, type)) {
@@ -73,16 +68,17 @@ void AbstractSingleMediaPreview::setSpoiler(bool spoiler) {
 	update();
 }
 
+void AbstractSingleMediaPreview::setCanShowHighQualityBadge(bool value) {
+	_canShowHighQualityBadge = value;
+	update();
+}
+
 bool AbstractSingleMediaPreview::hasSpoiler() const {
 	return _spoiler != nullptr;
 }
 
 bool AbstractSingleMediaPreview::canHaveSpoiler() const {
 	return supportsSpoilers();
-}
-
-rpl::producer<bool> AbstractSingleMediaPreview::spoileredChanges() const {
-	return _spoileredChanges.events();
 }
 
 QImage AbstractSingleMediaPreview::generatePriceTagBackground() const {
@@ -112,7 +108,7 @@ void AbstractSingleMediaPreview::preparePreview(QImage preview) {
 		preview = Images::Prepare(
 			std::move(preview),
 			QSize(maxW, maxH) * ratio,
-			{ .options = Images::Option::Blur, .outer = { maxW, maxH } });
+			{ .outer = { maxW, maxH } });
 	}
 	auto originalWidth = preview.width();
 	auto originalHeight = preview.height();
@@ -179,8 +175,19 @@ void AbstractSingleMediaPreview::paintEvent(QPaintEvent *e) {
 		}
 	});
 
+	auto hq = std::optional<PainterHighQualityEnabler>();
 	if (drawBackground()) {
 		const auto &padding = st::boxPhotoPadding;
+		const auto bgRect = QRect(
+			padding.left(),
+			0,
+			width() - padding.left() - padding.right(),
+			height());
+		const auto radius = st::bubbleRadiusSmall;
+		auto clipPath = QPainterPath();
+		clipPath.addRoundedRect(bgRect, radius, radius);
+		hq.emplace(p);
+		p.setClipPath(clipPath);
 		if (_previewLeft > padding.left()) {
 			p.fillRect(
 				padding.left(),
@@ -241,6 +248,12 @@ void AbstractSingleMediaPreview::paintEvent(QPaintEvent *e) {
 		auto icon = &st::historyFileInPlay;
 		icon->paintInCenter(p, inner);
 	}
+	if (_canShowHighQualityBadge && _sendWay.sendLargePhotos()) {
+		PaintHighQualityBadge(
+			p,
+			_st,
+			QRect(_previewLeft, _previewTop, _previewWidth, _previewHeight));
+	}
 }
 
 void AbstractSingleMediaPreview::mousePressEvent(QMouseEvent *e) {
@@ -257,9 +270,7 @@ void AbstractSingleMediaPreview::mouseMoveEvent(QMouseEvent *e) {
 
 void AbstractSingleMediaPreview::mouseReleaseEvent(QMouseEvent *e) {
 	if (base::take(_pressed) && isOverPreview(e->pos())) {
-		if (e->button() == Qt::RightButton) {
-			showContextMenu(e->globalPos());
-		} else if (isPhoto()) {
+		if (e->button() == Qt::LeftButton && isPhoto()) {
 			_photoEditorRequests.fire({});
 		}
 	}
@@ -269,32 +280,6 @@ void AbstractSingleMediaPreview::applyCursor(style::cursor cursor) {
 	if (_cursor != cursor) {
 		_cursor = cursor;
 		setCursor(_cursor);
-	}
-}
-
-void AbstractSingleMediaPreview::showContextMenu(QPoint position) {
-	if (!_canToggleSpoiler()
-		|| !_sendWay.sendImagesAsPhotos()
-		|| !supportsSpoilers()) {
-		return;
-	}
-	_menu = base::make_unique_q<Ui::PopupMenu>(
-		this,
-		_st.tabbed.menu);
-
-	const auto &icons = _st.tabbed.icons;
-	const auto spoilered = hasSpoiler();
-	_menu->addAction(spoilered
-		? tr::lng_context_disable_spoiler(tr::now)
-		: tr::lng_context_spoiler_effect(tr::now), [=] {
-		setSpoiler(!spoilered);
-		_spoileredChanges.fire_copy(!spoilered);
-	}, spoilered ? &icons.menuSpoilerOff : &icons.menuSpoiler);
-
-	if (_menu->empty()) {
-		_menu = nullptr;
-	} else {
-		_menu->popup(position);
 	}
 }
 

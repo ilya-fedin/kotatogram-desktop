@@ -39,8 +39,6 @@ public:
 private:
 	void setupContent(not_null<Window::SessionController*> controller);
 
-	const not_null<Window::SessionController*> _controller;
-
 };
 
 } // namespace Settings

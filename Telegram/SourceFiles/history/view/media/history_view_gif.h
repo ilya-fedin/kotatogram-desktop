@@ -15,9 +15,12 @@ struct HistoryMessageVia;
 struct HistoryMessageReply;
 struct HistoryMessageForwarded;
 class Painter;
+class PhotoData;
+class VoiceSeekClickHandler;
 
 namespace Data {
 class DocumentMedia;
+class PhotoMedia;
 } // namespace Data
 
 namespace Media {
@@ -37,6 +40,7 @@ enum class Error;
 
 namespace HistoryView {
 
+class Photo;
 class Reply;
 class TranscribeButton;
 
@@ -62,6 +66,7 @@ public:
 	void clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) override;
+	void updatePressed(QPoint point) override;
 
 	bool uploading() const override;
 
@@ -137,6 +142,10 @@ private:
 	void dataMediaCreated() const;
 
 	[[nodiscard]] bool autoplayEnabled() const;
+	[[nodiscard]] bool autoplayUnderCursor() const;
+	[[nodiscard]] bool underCursor() const;
+	[[nodiscard]] int maxInlineArea() const;
+	[[nodiscard]] bool canPlayInline() const;
 
 	void playAnimation(bool autoplay) override;
 	QSize countOptimalSize() override;
@@ -146,6 +155,7 @@ private:
 	Streamed *activeOwnStreamed() const;
 	::Media::Streaming::Instance *activeCurrentStreamed() const;
 	::Media::View::PlaybackProgress *videoPlayback() const;
+	bool isRoundSeekable() const;
 
 	void createStreamedPlayer();
 	void checkStreamedIsStarted() const;
@@ -163,6 +173,15 @@ private:
 		int y,
 		bool right,
 		const PaintContext &context) const;
+	void paintTimestampMark(
+		Painter &p,
+		QRect rthumb,
+		std::optional<Ui::BubbleRounding> rounding) const;
+	void paintRoundPlaybackProgress(
+		Painter &p,
+		const PaintContext &context,
+		QRect rthumb,
+		bool inTTLViewer) const;
 
 	[[nodiscard]] bool needInfoDisplay() const;
 	[[nodiscard]] bool needCornerStatusDisplay() const;
@@ -202,28 +221,41 @@ private:
 		QPoint point,
 		StateRequest request,
 		QPoint position) const;
+	[[nodiscard]] ClickHandlerPtr currentVideoLink() const;
 
 	void togglePollingStory(bool enabled) const;
 
 	TtlRoundPaintCallback _drawTtl;
 
 	const not_null<DocumentData*> _data;
+	PhotoData *_videoCover = nullptr;
 	const FullStoryId _storyId;
 	std::unique_ptr<Streamed> _streamed;
 	const std::unique_ptr<MediaSpoiler> _spoiler;
 	mutable std::unique_ptr<MediaSpoilerTag> _spoilerTag;
 	mutable std::unique_ptr<TranscribeButton> _transcribe;
 	mutable std::shared_ptr<Data::DocumentMedia> _dataMedia;
+	mutable std::shared_ptr<Data::PhotoMedia> _videoCoverMedia;
 	mutable std::unique_ptr<Image> _videoThumbnailFrame;
 	QString _downloadSize;
 	mutable QImage _thumbCache;
 	mutable QImage _roundingMask;
+	mutable crl::time _videoPosition = 0;
+	std::shared_ptr<VoiceSeekClickHandler> _seekl;
+	mutable Ui::Animations::Simple _seekAnimation;
+	float64 _seekingCurrent = 0.;
+	QPoint _seekPressPoint;
+	mutable QImage _seekLastFrame;
+	mutable TimeId _videoTimestamp = 0;
 	mutable std::optional<Ui::BubbleRounding> _thumbCacheRounding;
 	mutable bool _thumbCacheBlurred : 1 = false;
 	mutable bool _thumbIsEllipse : 1 = false;
 	mutable bool _pollingStory : 1 = false;
 	mutable bool _purchasedPriceTag : 1 = false;
+	mutable bool _seeking : 1 = false;
+	mutable bool _smallGroupPart : 1 = false;
 	const bool _sensitiveSpoiler : 1 = false;
+	const bool _hasVideoCover : 1 = false;
 
 };
 

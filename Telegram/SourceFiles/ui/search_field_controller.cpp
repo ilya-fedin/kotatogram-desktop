@@ -30,10 +30,6 @@ auto SearchFieldController::createRowView(
 
 	auto field = createField(wrap, st.field).release();
 	field->show();
-	field->cancelled(
-	) | rpl::start_with_next([=] {
-		field->setText(QString());
-	}, field->lifetime());
 
 	auto cancel = CreateChild<Ui::CrossButton>(
 		wrap,
@@ -44,8 +40,9 @@ auto SearchFieldController::createRowView(
 	queryValue(
 	) | rpl::map([](const QString &value) {
 		return !value.isEmpty();
-	}) | rpl::start_with_next([cancel](bool shown) {
+	}) | rpl::on_next([cancel](bool shown) {
 		cancel->toggle(shown, anim::type::normal);
+		cancel->setAccessibleName(tr::lng_sr_clear_search(tr::now));
 	}, cancel->lifetime());
 	cancel->finishAnimating();
 
@@ -53,7 +50,7 @@ auto SearchFieldController::createRowView(
 	shadow->show();
 
 	wrap->widthValue(
-	) | rpl::start_with_next([=, &st](int newWidth) {
+	) | rpl::on_next([=, &st](int newWidth) {
 		auto availableWidth = newWidth
 			- st.fieldIconSkip
 			- st.fieldCancelSkip;
@@ -70,7 +67,7 @@ auto SearchFieldController::createRowView(
 			st::lineWidth);
 	}, wrap->lifetime());
 	wrap->paintRequest(
-	) | rpl::start_with_next([=, &st] {
+	) | rpl::on_next([=, &st] {
 		auto p = QPainter(wrap);
 		st.fieldIcon.paint(
 			p,
@@ -96,6 +93,10 @@ rpl::producer<QString> SearchFieldController::queryChanges() const {
 	return _query.changes();
 }
 
+void SearchFieldController::setQuery(const QString &query) {
+	_query = query;
+}
+
 base::unique_qptr<Ui::InputField> SearchFieldController::createField(
 		QWidget *parent,
 		const style::InputField &st) {
@@ -106,7 +107,7 @@ base::unique_qptr<Ui::InputField> SearchFieldController::createField(
 		_query.current());
 	auto field = result.get();
 	field->changes(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		_query = field->getLastText();
 	}, field->lifetime());
 	_view.reset(field);

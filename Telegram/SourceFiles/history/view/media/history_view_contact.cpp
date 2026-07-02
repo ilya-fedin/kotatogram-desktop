@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_contact.h"
 
+#include "kotato/kotato_radius.h"
 #include "boxes/add_contact_box.h"
 #include "core/click_handler_types.h" // ClickHandlerContext
 #include "data/data_media_types.h"
@@ -37,7 +38,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
-class ContactClickHandler : public LambdaClickHandler {
+class ContactClickHandler final : public LambdaClickHandler {
 public:
 	using LambdaClickHandler::LambdaClickHandler;
 
@@ -45,7 +46,7 @@ public:
 		_dragText = t;
 	}
 
-	QString dragText() const override {
+	QString dragText() const override final {
 		return _dragText;
 	}
 
@@ -227,13 +228,6 @@ Contact::Contact(
 		st::webPageDescriptionStyle,
 		Ui::FormatPhone(data.phoneNumber),
 		Ui::WebpageTextTitleOptions());
-
-#if 0 // No info.
-	_infoLine.setText(
-		st::webPageDescriptionStyle,
-		phone,
-		Ui::WebpageTextTitleOptions());
-#endif
 }
 
 Contact::~Contact() {
@@ -322,10 +316,6 @@ QSize Contact::countOptimalSize() {
 		accumulate_max(maxWidth, lineLeft + _phoneLine.maxWidth());
 		textMinHeight += 1 * lineHeight;
 	}
-	if (!_infoLine.isEmpty()) {
-		accumulate_max(maxWidth, lineLeft + _infoLine.maxWidth());
-		textMinHeight += std::min(_infoLine.minHeight(), 1 * lineHeight);
-	}
 	minHeight = std::max(textMinHeight, st::contactsPhotoSize);
 
 	if (!_buttons.empty()) {
@@ -360,28 +350,41 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 		? _contact->colorIndex()
 		: Data::DecideColorIndex(
 			Data::FakePeerIdForJustName(_nameLine.toString()));
-	const auto cache = context.outbg
-		? stm->replyCache[st->colorPatternIndex(colorIndex)].get()
-		: st->coloredReplyCache(selected, colorIndex).get();
+	const auto &colorCollectible = _contact
+		? _contact->colorCollectible()
+		: nullptr;
+	const auto colorPattern = colorCollectible
+		? st->collectiblePatternIndex(colorCollectible)
+		: st->colorPatternIndex(colorIndex);
+	const auto useColorCollectible = colorCollectible && !context.outbg;
+	const auto useColorIndex = !context.outbg;
+	const auto cache = useColorCollectible
+		? st->collectibleReplyCache(selected, colorCollectible).get()
+		: useColorIndex
+		? st->coloredReplyCache(selected, colorIndex).get()
+		: stm->replyCache[colorPattern].get();
 	const auto backgroundEmojiId = _contact
 		? _contact->backgroundEmojiId()
 		: DocumentId();
-	const auto backgroundEmoji = backgroundEmojiId
-		? st->backgroundEmojiData(backgroundEmojiId).get()
+	const auto backgroundEmojiData = backgroundEmojiId
+		? st->backgroundEmojiData(backgroundEmojiId, colorCollectible).get()
 		: nullptr;
-	const auto backgroundEmojiCache = backgroundEmoji
-		? &backgroundEmoji->caches[Ui::BackgroundEmojiData::CacheIndex(
+	const auto backgroundEmojiCache = !backgroundEmojiData
+		? nullptr
+		: useColorCollectible
+		? &backgroundEmojiData->collectibleCaches[colorCollectible]
+		: &backgroundEmojiData->caches[Ui::BackgroundEmojiData::CacheIndex(
 			selected,
 			context.outbg,
 			true,
-			colorIndex + 1)]
-		: nullptr;
+			useColorIndex ? (colorIndex + 1) : 0)];
 	Ui::Text::ValidateQuotePaintCache(*cache, _st);
 	Ui::Text::FillQuotePaint(p, outer, *cache, _st);
-	if (backgroundEmoji) {
+	if (backgroundEmojiData) {
 		ValidateBackgroundEmoji(
 			backgroundEmojiId,
-			backgroundEmoji,
+			colorCollectible,
+			backgroundEmojiData,
 			backgroundEmojiCache,
 			cache,
 			view);
@@ -389,7 +392,12 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 			const auto end = rect::bottom(inner) + _st.padding.bottom();
 			const auto r = outer
 				- QMargins(0, 0, 0, rect::bottom(outer) - end);
-			FillBackgroundEmoji(p, r, false, *backgroundEmojiCache);
+			FillBackgroundEmoji(
+				p,
+				r,
+				false,
+				*backgroundEmojiCache,
+				backgroundEmojiData->firstGiftFrame);
 		}
 	}
 
@@ -425,7 +433,7 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 			auto hq = PainterHighQualityEnabler(p);
 			p.setBrush(p.textPalette().selectOverlay);
 			p.setPen(Qt::NoPen);
-			p.drawEllipse(left, top, _pixh, _pixh);
+			Kotato::DrawUserpicShape(p, left, top, _pixh, _pixh, _pixh);
 		}
 	}
 
@@ -435,9 +443,11 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 
 	{
 		p.setPen(cache->icon);
-		p.setTextPalette(context.outbg
-			? stm->semiboldPalette
-			: st->coloredTextPalette(selected, colorIndex));
+		p.setTextPalette(useColorCollectible
+			? st->collectibleTextPalette(selected, colorCollectible)
+			: useColorIndex
+			? st->coloredTextPalette(selected, colorIndex)
+			: stm->semiboldPalette);
 
 		const auto endskip = _nameLine.hasSkipBlock()
 			? _parent->skipBlockWidth()
@@ -480,26 +490,6 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 			toTitleSelection(context.selection));
 		tshift += 1 * lineHeight;
 	}
-	if (!_infoLine.isEmpty()) {
-		tshift += st::lineWidth * 3; // Additional skip.
-		const auto endskip = _infoLine.hasSkipBlock()
-			? _parent->skipBlockWidth()
-			: 0;
-		_parent->prepareCustomEmojiPaint(p, context, _infoLine);
-		_infoLine.draw(p, {
-			.position = { lineLeft, tshift },
-			.outerWidth = width(),
-			.availableWidth = lineWidth,
-			.spoiler = Ui::Text::DefaultSpoilerCache(),
-			.now = context.now,
-			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
-			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-			.selection = toDescriptionSelection(context.selection),
-			.elisionHeight = (1 * lineHeight),
-			.elisionRemoveFromEnd = endskip,
-		});
-		tshift += (1 * lineHeight);
-	}
 
 	if (!_buttons.empty()) {
 		p.setFont(st::semiboldFont);
@@ -537,7 +527,7 @@ TextState Contact::textState(QPoint point, StateRequest request) const {
 
 	_lastPoint = point;
 
-	if (_buttons.size() > 1) {
+	if (!hasSingleLink()) {
 		const auto end = rect::bottom(inner) + _st.padding.bottom();
 		const auto bWidth = inner.width() / float64(_buttons.size());
 		const auto bHeight = rect::bottom(outer) - end;
@@ -564,6 +554,14 @@ bool Contact::hasHeavyPart() const {
 	return !_userpic.null();
 }
 
+bool Contact::hasSingleLink() const {
+	return (_buttons.size() > 1)
+		? false
+		: (_buttons.size() == 1 && _buttons.front().link == _mainButton.link)
+		? true
+		: (_buttons.empty() && _mainButton.link);
+}
+
 void Contact::clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) {
@@ -571,7 +569,7 @@ void Contact::clickHandlerPressedChanged(
 	const auto outer = full - inBubblePadding();
 	const auto inner = outer - innerMargin();
 	const auto end = rect::bottom(inner) + _st.padding.bottom();
-	if ((_lastPoint.y() < end) || (_buttons.size() <= 1)) {
+	if ((_lastPoint.y() < end) || hasSingleLink()) {
 		if (p != _mainButton.link) {
 			return;
 		}

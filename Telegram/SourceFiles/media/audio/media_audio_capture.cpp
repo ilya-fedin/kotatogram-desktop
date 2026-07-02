@@ -88,13 +88,15 @@ public:
 	void start(
 		Webrtc::DeviceResolvedId id,
 		Fn<void(Update)> updated,
-		Fn<void()> error);
+		Fn<void()> error,
+		Fn<void(Chunk)> externalProcessing);
 	void stop(Fn<void(Result&&)> callback = nullptr);
 	void pause(bool value, Fn<void(Result&&)> callback);
 
 private:
 	void process();
 
+	bool initializeFFmpeg();
 	[[nodiscard]] bool processFrame(int32 offset, int32 framesize);
 	void fail();
 
@@ -104,6 +106,7 @@ private:
 	// Returns number of packets written or -1 on error
 	[[nodiscard]] int writePackets();
 
+	Fn<void(Chunk)> _externalProcessing;
 	Fn<void(Update)> _updated;
 	Fn<void()> _error;
 
@@ -131,7 +134,7 @@ Instance::Instance() : _inner(std::make_unique<Inner>(&_thread)) {
 	_thread.start();
 }
 
-void Instance::start() {
+void Instance::start(Fn<void(Chunk)> externalProcessing) {
 	_updates.fire_done();
 	const auto id = Audio::Current().captureDeviceId();
 	InvokeQueued(_inner.get(), [=] {
@@ -141,9 +144,9 @@ void Instance::start() {
 			});
 		}, [=] {
 			crl::on_main(this, [=] {
-				_updates.fire_error({});
+				_updates.fire_error(Error::Other);
 			});
-		});
+		}, externalProcessing);
 		crl::on_main(this, [=] {
 			_started = true;
 		});
@@ -167,13 +170,15 @@ void Instance::stop(Fn<void(Result&&)> callback) {
 }
 
 void Instance::pause(bool value, Fn<void(Result&&)> callback) {
-	Expects(callback != nullptr || !value);
 	InvokeQueued(_inner.get(), [=] {
-		_inner->pause(value, [=](Result &&result) {
-			crl::on_main([=, result = std::move(result)]() mutable {
-				callback(std::move(result));
-			});
-		});
+		auto done = callback
+			? [=](Result &&result) {
+				crl::on_main([=, result = std::move(result)]() mutable {
+					callback(std::move(result));
+				});
+			}
+			: std::move(callback);
+		_inner->pause(value, std::move(done));
 	});
 }
 
@@ -304,7 +309,9 @@ void Instance::Inner::fail() {
 void Instance::Inner::start(
 		Webrtc::DeviceResolvedId id,
 		Fn<void(Update)> updated,
-		Fn<void()> error) {
+		Fn<void()> error,
+		Fn<void(Chunk)> externalProcessing) {
+	_externalProcessing = std::move(externalProcessing);
 	_updated = std::move(updated);
 	_error = std::move(error);
 	if (_paused) {
@@ -329,8 +336,19 @@ void Instance::Inner::start(
 		d->device = nullptr;
 		fail();
 		return;
+	} else if (!_externalProcessing) {
+		if (!initializeFFmpeg()) {
+			fail();
+			return;
+		}
 	}
+	_timer.callEach(50);
+	_captured.clear();
+	_captured.reserve(kCaptureBufferSlice);
+	DEBUG_LOG(("Audio Capture: started!"));
+}
 
+bool Instance::Inner::initializeFFmpeg() {
 	// Create encoding context
 
 	d->ioBuffer = (uchar*)av_malloc(FFmpeg::kAVBlockSize);
@@ -347,14 +365,12 @@ void Instance::Inner::start(
 	}
 	if (!fmt) {
 		LOG(("Audio Error: Unable to find opus AVOutputFormat for capture"));
-		fail();
-		return;
+		return false;
 	}
 
 	if ((res = avformat_alloc_output_context2(&d->fmtContext, (AVOutputFormat*)fmt, 0, 0)) < 0) {
 		LOG(("Audio Error: Unable to avformat_alloc_output_context2 for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
-		fail();
-		return;
+		return false;
 	}
 	d->fmtContext->pb = d->ioContext;
 	d->fmtContext->flags |= AVFMT_FLAG_CUSTOM_IO;
@@ -364,34 +380,26 @@ void Instance::Inner::start(
 	d->codec = avcodec_find_encoder(fmt->audio_codec);
 	if (!d->codec) {
 		LOG(("Audio Error: Unable to avcodec_find_encoder for capture"));
-		fail();
-		return;
+		return false;
 	}
 	d->stream = avformat_new_stream(d->fmtContext, d->codec);
 	if (!d->stream) {
 		LOG(("Audio Error: Unable to avformat_new_stream for capture"));
-		fail();
-		return;
+		return false;
 	}
 	d->stream->id = d->fmtContext->nb_streams - 1;
 	d->codecContext = avcodec_alloc_context3(d->codec);
 	if (!d->codecContext) {
 		LOG(("Audio Error: Unable to avcodec_alloc_context3 for capture"));
-		fail();
-		return;
+		return false;
 	}
 
 	av_opt_set_int(d->codecContext, "refcounted_frames", 1, 0);
 
 	d->codecContext->sample_fmt = AV_SAMPLE_FMT_FLTP;
 	d->codecContext->bit_rate = 32000;
-#if DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	d->codecContext->ch_layout = AV_CHANNEL_LAYOUT_MONO;
 	d->channels = d->codecContext->ch_layout.nb_channels;
-#else // DA_FFMPEG_NEW_CHANNEL_LAYOUT
-	d->codecContext->channel_layout = AV_CH_LAYOUT_MONO;
-	d->channels = d->codecContext->channels = 1;
-#endif // DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	d->codecContext->sample_rate = kCaptureFrequency;
 
 	if (d->fmtContext->oformat->flags & AVFMT_GLOBALHEADER) {
@@ -401,8 +409,7 @@ void Instance::Inner::start(
 	// Open audio stream
 	if ((res = avcodec_open2(d->codecContext, d->codec, nullptr)) < 0) {
 		LOG(("Audio Error: Unable to avcodec_open2 for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
-		fail();
-		return;
+		return false;
 	}
 
 	// Alloc source samples
@@ -417,7 +424,6 @@ void Instance::Inner::start(
 	// Using _captured directly
 
 	// Prepare resampling
-#if DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	res = swr_alloc_set_opts2(
 		&d->swrContext,
 		&d->codecContext->ch_layout,
@@ -428,54 +434,29 @@ void Instance::Inner::start(
 		d->codecContext->sample_rate,
 		0,
 		nullptr);
-#else // DA_FFMPEG_NEW_CHANNEL_LAYOUT
-	d->swrContext = swr_alloc_set_opts(
-		d->swrContext,
-		d->codecContext->channel_layout,
-		d->codecContext->sample_fmt,
-		d->codecContext->sample_rate,
-		d->codecContext->channel_layout,
-		AV_SAMPLE_FMT_S16,
-		d->codecContext->sample_rate,
-		0,
-		nullptr);
-	res = 0;
-#endif // DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	if (res < 0 || !d->swrContext) {
 		LOG(("Audio Error: Unable to swr_alloc_set_opts2 for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
-		fail();
-		return;
+		return false;
 	} else if ((res = swr_init(d->swrContext)) < 0) {
 		LOG(("Audio Error: Unable to swr_init for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
-		fail();
-		return;
+		return false;
 	}
-
 	d->maxDstSamples = d->srcSamples;
 	if ((res = av_samples_alloc_array_and_samples(&d->dstSamplesData, 0, d->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0)) < 0) {
 		LOG(("Audio Error: Unable to av_samples_alloc_array_and_samples for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
-		fail();
-		return;
+		return false;
 	}
 	d->dstSamplesSize = av_samples_get_buffer_size(0, d->channels, d->maxDstSamples, d->codecContext->sample_fmt, 0);
-
 	if ((res = avcodec_parameters_from_context(d->stream->codecpar, d->codecContext)) < 0) {
 		LOG(("Audio Error: Unable to avcodec_parameters_from_context for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
-		fail();
-		return;
+		return false;
 	}
-
 	// Write file header
 	if ((res = avformat_write_header(d->fmtContext, 0)) < 0) {
 		LOG(("Audio Error: Unable to avformat_write_header for capture, error %1, %2").arg(res).arg(av_make_error_string(err, sizeof(err), res)));
-		fail();
-		return;
+		return false;
 	}
-
-	_timer.callEach(50);
-	_captured.clear();
-	_captured.reserve(kCaptureBufferSlice);
-	DEBUG_LOG(("Audio Capture: started!"));
+	return true;
 }
 
 void Instance::Inner::pause(bool value, Fn<void(Result&&)> callback) {
@@ -483,11 +464,16 @@ void Instance::Inner::pause(bool value, Fn<void(Result&&)> callback) {
 	if (!_paused) {
 		return;
 	}
-	callback({
-		d->fullSamples ? d->data : QByteArray(),
-		d->fullSamples ? CollectWaveform(d->waveform) : VoiceWaveform(),
-		qint32(d->fullSamples),
-	});
+	if (callback) {
+		callback({
+			.bytes = d->fullSamples ? d->data : QByteArray(),
+			.waveform = (d->fullSamples
+				? CollectWaveform(d->waveform)
+				: VoiceWaveform()),
+			.duration = ((d->fullSamples * crl::time(1000))
+				/ int64(kCaptureFrequency)),
+		});
+	}
 }
 
 void Instance::Inner::stop(Fn<void(Result&&)> callback) {
@@ -559,7 +545,7 @@ void Instance::Inner::stop(Fn<void(Result&&)> callback) {
 	_captured = QByteArray();
 
 	// Finish stream
-	if (needResult && hadDevice) {
+	if (needResult && hadDevice && d->fmtContext) {
 		av_write_trailer(d->fmtContext);
 	}
 
@@ -622,7 +608,11 @@ void Instance::Inner::stop(Fn<void(Result&&)> callback) {
 	}
 
 	if (needResult) {
-		callback({ result, waveform, samples });
+		callback({
+			.bytes = result,
+			.waveform = waveform,
+			.duration = (samples * crl::time(1000)) / kCaptureFrequency,
+		});
 	}
 }
 
@@ -658,6 +648,13 @@ void Instance::Inner::process() {
 		if (ErrorHappened(d->device)) {
 			fail();
 			return;
+		} else if (_externalProcessing) {
+			_externalProcessing({
+				.finished = crl::now(),
+				.samples = base::take(_captured),
+				.frequency = kCaptureFrequency,
+			});
+			return;
 		}
 
 		// Count new recording level and update view
@@ -666,7 +663,7 @@ void Instance::Inner::process() {
 		auto levelindex = d->fullSamples + static_cast<int>(s / sizeof(short));
 		for (auto ptr = (const short*)(_captured.constData() + s), end = (const short*)(_captured.constData() + news); ptr < end; ++ptr, ++levelindex) {
 			if (levelindex > skipSamples) {
-				uint16 value = qAbs(*ptr);
+				uint16 value = qAbs(int(*ptr));
 				if (levelindex < skipSamples + fadeSamples) {
 					value = qRound(value * float64(levelindex - skipSamples) / fadeSamples);
 				}
@@ -734,7 +731,7 @@ bool Instance::Inner::processFrame(int32 offset, int32 framesize) {
 
 	d->waveform.reserve(d->waveform.size() + (samplesCnt / d->waveformEach) + 1);
 	for (short *ptr = srcSamplesDataChannel, *end = ptr + samplesCnt; ptr != end; ++ptr) {
-		uint16 value = qAbs(*ptr);
+		uint16 value = qAbs(int(*ptr));
 		if (d->waveformPeak < value) {
 			d->waveformPeak = value;
 		}
@@ -770,12 +767,7 @@ bool Instance::Inner::processFrame(int32 offset, int32 framesize) {
 	AVFrame *frame = av_frame_alloc();
 
 	frame->format = d->codecContext->sample_fmt;
-#if DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	av_channel_layout_copy(&frame->ch_layout, &d->codecContext->ch_layout);
-#else // DA_FFMPEG_NEW_CHANNEL_LAYOUT
-	frame->channels = d->codecContext->channels;
-	frame->channel_layout = d->codecContext->channel_layout;
-#endif // DA_FFMPEG_NEW_CHANNEL_LAYOUT
 	frame->sample_rate = d->codecContext->sample_rate;
 	frame->nb_samples = d->dstSamples;
 	frame->pts = av_rescale_q(d->fullSamples, AVRational { 1, d->codecContext->sample_rate }, d->codecContext->time_base);

@@ -16,17 +16,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user_photos.h"
 #include "data/data_web_page.h"
 #include "data/data_cloud_themes.h" // Data::CloudTheme.
+#include "media/stories/media_stories_delegate.h"
 #include "media/view/media_view_playback_controls.h"
 #include "media/view/media_view_open_common.h"
-#include "media/stories/media_stories_delegate.h"
+#include "media/media_common.h"
+#include "platform/platform_text_recognition.h"
 
 class History;
+struct PollAnswer;
 
 namespace anim {
 enum class activation : uchar;
 } // namespace anim
 
+namespace Calls {
+class GroupCall;
+} // namespace Calls
+
 namespace Data {
+class GroupCall;
 class PhotoMedia;
 class DocumentMedia;
 struct StoriesContext;
@@ -77,6 +85,8 @@ struct ContentLayout;
 
 namespace Media::View {
 
+class VideoStream;
+class PlaybackSponsored;
 class GroupThumbs;
 class Pip;
 
@@ -107,15 +117,6 @@ public:
 
 	void show(OpenRequest request);
 
-	//void leaveToChildEvent(QEvent *e, QWidget *child) override {
-	//	// e -- from enterEvent() of child TWidget
-	//	updateOverState(Over::None);
-	//}
-	//void enterFromChildEvent(QEvent *e, QWidget *child) override {
-	//	// e -- from leaveEvent() of child TWidget
-	//	updateOver(mapFromGlobal(QCursor::pos()));
-	//}
-
 	void activateControls();
 	void close();
 	void minimize();
@@ -138,9 +139,11 @@ private:
 	struct PipWrap;
 	struct ItemContext;
 	struct StoriesContext;
+	struct InstantViewMedia;
 	class Renderer;
 	class RendererSW;
 	class RendererGL;
+	class RendererRhi;
 	class SponsoredButton;
 
 	// If changing, see paintControls()!
@@ -158,6 +161,8 @@ private:
 		Share,
 		Rotate,
 		More,
+		Draw,
+		Recognize,
 		Icon,
 		Video,
 		Caption,
@@ -169,7 +174,10 @@ private:
 			not_null<DocumentData*>> data;
 		HistoryItem *item = nullptr;
 		MsgId topicRootId = 0;
+		PeerId monoforumPeerId = 0;
 	};
+	using InstantViewItem = std::variant<PhotoData*, DocumentData*>;
+	using InstantViewItems = std::vector<InstantViewItem>;
 	enum class SavePhotoVideo {
 		None,
 		QuickSave,
@@ -219,6 +227,7 @@ private:
 	bool handleTouchEvent(not_null<QTouchEvent*> e);
 	void handleWheelEvent(not_null<QWheelEvent*> e);
 	void handleKeyPress(not_null<QKeyEvent*> e);
+	void handleKeyRelease(not_null<QKeyEvent*> e);
 
 	void toggleApplicationEventFilter(bool install);
 	bool filterApplicationEvent(
@@ -236,6 +245,9 @@ private:
 	void playbackControlsVolumeChangeFinished() override;
 	void playbackControlsSpeedChanged(float64 speed) override;
 	float64 playbackControlsCurrentSpeed(bool lastNonDefault) override;
+	std::vector<VideoQuality> playbackControlsQualities() override;
+	VideoQuality playbackControlsCurrentQuality() override;
+	void playbackControlsQualityChanged(VideoQuality quality) override;
 	void playbackControlsToFullScreen() override;
 	void playbackControlsFromFullScreen() override;
 	void playbackControlsToPictureInPicture() override;
@@ -281,16 +293,25 @@ private:
 	void deleteMedia();
 	void showMediaOverview();
 	void copyMedia();
+	void recognize();
+	void draw();
 	void receiveMouse();
 	void showAttachedStickers();
+	[[nodiscard]] auto scaledRecognitionRect(QPoint position)
+	const -> std::optional<Platform::TextRecognition::RectWithText>;
 	void showDropdown();
 	void handleTouchTimer();
 	void handleDocumentClick();
 
+	[[nodiscard]] bool canShareAtTime() const;
+	[[nodiscard]] TimeId shareAtVideoTimestamp() const;
+	void shareAtTime();
+
 	void showSaveMsgToast(const QString &path, auto phrase);
 	void showSaveMsgToastWith(
 		const QString &path,
-		const TextWithEntities &text);
+		const TextWithEntities &text,
+		crl::time duration = 0);
 	void updateSaveMsg();
 
 	void clearBeforeHide();
@@ -298,6 +319,7 @@ private:
 
 	void assignMediaPointer(DocumentData *document);
 	void assignMediaPointer(not_null<PhotoData*> photo);
+	void assignMediaPointer(std::shared_ptr<Data::GroupCall> call);
 
 	void updateOver(QPoint mpos);
 	void initFullScreen();
@@ -315,11 +337,13 @@ private:
 	void checkForSaveLoaded();
 	void showPremiumDownloadPromo();
 
-	Entity entityForUserPhotos(int index) const;
-	Entity entityForSharedMedia(int index) const;
-	Entity entityForCollage(int index) const;
-	Entity entityByIndex(int index) const;
-	Entity entityForItemId(const FullMsgId &itemId) const;
+	[[nodiscard]] std::optional<InstantViewItem> instantViewMediaKey() const;
+	[[nodiscard]] Entity entityForUserPhotos(int index) const;
+	[[nodiscard]] Entity entityForInstantViewMedia(int index) const;
+	[[nodiscard]] Entity entityForSharedMedia(int index) const;
+	[[nodiscard]] Entity entityForCollage(int index) const;
+	[[nodiscard]] Entity entityByIndex(int index) const;
+	[[nodiscard]] Entity entityForItemId(const FullMsgId &itemId) const;
 	bool moveToEntity(const Entity &entity, int preloadDelta = 0);
 
 	void setContext(std::variant<
@@ -335,23 +359,26 @@ private:
 	struct SharedMedia;
 	using SharedMediaType = SharedMediaWithLastSlice::Type;
 	using SharedMediaKey = SharedMediaWithLastSlice::Key;
-	std::optional<SharedMediaType> sharedMediaType() const;
-	std::optional<SharedMediaKey> sharedMediaKey() const;
-	std::optional<SharedMediaType> computeOverviewType() const;
+	[[nodiscard]] std::optional<SharedMediaType> sharedMediaType() const;
+	[[nodiscard]] std::optional<SharedMediaKey> sharedMediaKey() const;
+	[[nodiscard]] std::optional<SharedMediaType> computeOverviewType() const;
 	bool validSharedMedia() const;
 	void validateSharedMedia();
 	void handleSharedMediaUpdate(SharedMediaWithLastSlice &&update);
 
 	struct UserPhotos;
 	using UserPhotosKey = UserPhotosSlice::Key;
-	std::optional<UserPhotosKey> userPhotosKey() const;
+	[[nodiscard]] std::optional<UserPhotosKey> userPhotosKey() const;
 	bool validUserPhotos() const;
 	void validateUserPhotos();
 	void handleUserPhotosUpdate(UserPhotosSlice &&update);
 
+	bool validInstantViewMedia() const;
+	void validateInstantViewMedia();
+
 	struct Collage;
 	using CollageKey = WebPageCollage::Item;
-	std::optional<CollageKey> collageKey() const;
+	[[nodiscard]] std::optional<CollageKey> collageKey() const;
 	bool validCollage() const;
 	void validateCollage();
 
@@ -360,6 +387,9 @@ private:
 
 	void refreshFromLabel();
 	void refreshCaption();
+	void refreshTimestampDividers(
+		const TextWithEntities &caption,
+		TimeId duration);
 	void refreshMediaViewer();
 	void refreshNavVisibility();
 	void refreshGroupThumbs();
@@ -384,6 +414,9 @@ private:
 		anim::activation activation = anim::activation::normal,
 		const Data::CloudTheme &cloud = Data::CloudTheme(),
 		const StartStreaming &startStreaming = StartStreaming());
+	void displayVideoStream(
+		const std::shared_ptr<Data::GroupCall> &call,
+		anim::activation activation = anim::activation::normal);
 	void displayFinished(anim::activation activation);
 	void redisplayContent();
 	void findCurrent();
@@ -395,6 +428,7 @@ private:
 	void seekRelativeTime(crl::time time);
 	void restartAtProgress(float64 progress);
 	void restartAtSeekPosition(crl::time position);
+	void flushPendingFrameStep();
 
 	void refreshClipControllerGeometry();
 	void refreshCaptionGeometry();
@@ -403,6 +437,7 @@ private:
 		const StartStreaming &startStreaming = StartStreaming());
 	void startStreamingPlayer(const StartStreaming &startStreaming);
 	void initStreamingThumbnail();
+	void markStreamedReady();
 	void streamingReady(Streaming::Information &&info);
 	[[nodiscard]] bool createStreamingObjects();
 	void handleStreamingUpdate(Streaming::Update &&update);
@@ -417,6 +452,12 @@ private:
 	void refreshSponsoredButtonGeometry();
 	void refreshSponsoredButtonWidth();
 
+	void refreshVoteButton();
+	void refreshVoteButtonGeometry();
+	void refreshPollVotersWidget();
+	void refreshPollVotersWidgetGeometry();
+	[[nodiscard]] const PollAnswer *currentPollAnswer() const;
+
 	void documentUpdated(not_null<DocumentData*> document);
 	void changingMsgId(FullMsgId newId, MsgId oldId);
 
@@ -430,11 +471,11 @@ private:
 	void contentSizeChanged();
 
 	// Radial animation interface.
-	float64 radialProgress() const;
-	bool radialLoading() const;
-	QRect radialRect() const;
+	[[nodiscard]] float64 radialProgress() const;
+	[[nodiscard]] bool radialLoading() const;
+	[[nodiscard]] QRect radialRect() const;
 	void radialStart();
-	crl::time radialTimeShift() const;
+	[[nodiscard]] crl::time radialTimeShift() const;
 
 	void updateHeader();
 	void snapXY();
@@ -487,6 +528,18 @@ private:
 		bool nonbright = false) const;
 	[[nodiscard]] bool isSaveMsgShown() const;
 
+	void showChapterIndicator(const QString &name, int direction);
+	void paintChapterContent(Painter &p, QRect outer, QRect clip);
+	[[nodiscard]] bool isChapterShown() const;
+	void updateChapter();
+
+	void startSpeedBoost();
+	void stopSpeedBoost();
+	void updateSpeedBoostRect();
+	void paintSpeedBoostContent(Painter &p, QRect outer, QRect clip);
+	[[nodiscard]] bool isSpeedBoostShown() const;
+	void updateSpeedBoost();
+
 	void updateOverRect(Over state);
 	bool updateOverState(Over newState);
 	float64 overLevel(Over control) const;
@@ -496,6 +549,7 @@ private:
 
 	void validatePhotoImage(Image *image, bool blurred);
 	void validatePhotoCurrentImage();
+	void tryStartTextRecognition();
 
 	[[nodiscard]] bool hasCopyMediaRestriction(
 		bool skipPremiumCheck = false) const;
@@ -524,6 +578,7 @@ private:
 	void clearStreaming(bool savePosition = true);
 	[[nodiscard]] bool canInitStreaming() const;
 	[[nodiscard]] bool saveControlLocked() const;
+	void applyVideoQuality(VideoQuality value);
 
 	[[nodiscard]] bool topShadowOnTheRight() const;
 	void applyHideWindowWorkaround();
@@ -551,9 +606,13 @@ private:
 	rpl::lifetime _sessionLifetime;
 	PhotoData *_photo = nullptr;
 	DocumentData *_document = nullptr;
+	DocumentData *_chosenQuality = nullptr;
+	PhotoData *_videoCover = nullptr;
+	Media::VideoQuality _quality;
 	QString _documentLoadingTo;
 	std::shared_ptr<Data::PhotoMedia> _photoMedia;
 	std::shared_ptr<Data::DocumentMedia> _documentMedia;
+	std::shared_ptr<Data::PhotoMedia> _videoCoverMedia;
 	base::flat_set<std::shared_ptr<Data::PhotoMedia>> _preloadPhotos;
 	base::flat_set<std::shared_ptr<Data::DocumentMedia>> _preloadDocuments;
 	int _rotation = 0;
@@ -562,14 +621,18 @@ private:
 	std::optional<SharedMediaWithLastSlice::Key> _sharedMediaDataKey;
 	std::unique_ptr<UserPhotos> _userPhotos;
 	std::optional<UserPhotosSlice> _userPhotosData;
+	std::unique_ptr<InstantViewMedia> _instantViewMedia;
+	std::optional<InstantViewItems> _instantViewMediaData;
 	std::unique_ptr<Collage> _collage;
 	std::optional<WebPageCollage> _collageData;
 
 	QRect _leftNav, _leftNavOver, _leftNavIcon;
 	QRect _rightNav, _rightNavOver, _rightNavIcon;
-	QRect _headerNav, _nameNav, _dateNav;
+	QRect _headerNav, _nameNav, _dateNav, _separatorNav;
 	QRect _rotateNav, _rotateNavOver, _rotateNavIcon;
 	QRect _shareNav, _shareNavOver, _shareNavIcon;
+	QRect _drawNav, _drawNavOver, _drawNavIcon;
+	QRect _recognizeNav, _recognizeNavOver, _recognizeNavIcon;
 	QRect _saveNav, _saveNavOver, _saveNavIcon;
 	QRect _moreNav, _moreNavOver, _moreNavIcon;
 	bool _leftNavVisible = false;
@@ -577,6 +640,9 @@ private:
 	bool _saveVisible = false;
 	bool _shareVisible = false;
 	bool _rotateVisible = false;
+	bool _drawButtonEnabled = true;
+	bool _drawVisible = false;
+	bool _recognizeVisible = false;
 	bool _headerHasLink = false;
 	QString _dateText;
 	QString _headerText;
@@ -625,8 +691,13 @@ private:
 
 	std::unique_ptr<Streamed> _streamed;
 	std::unique_ptr<PipWrap> _pip;
+	QImage _streamedQualityChangeFrame;
+	crl::time _streamedPosition = 0;
 	int _streamedCreated = 0;
+	bool _streamedQualityChangeFinished = false;
 	bool _showAsPip = false;
+
+	Qt::Orientations _flip;
 
 	std::unique_ptr<Stories::View> _stories;
 	std::shared_ptr<Show> _cachedShow;
@@ -634,6 +705,10 @@ private:
 	Main::Session *_storiesSession = nullptr;
 	rpl::event_stream<ChatHelpers::FileChosen> _storiesStickerOrEmojiChosen;
 	std::unique_ptr<Ui::LayerManager> _layerBg;
+
+	std::unique_ptr<VideoStream> _videoStream;
+	QString _callLinkSlug;
+	MsgId _callJoinMessageId;
 
 	const style::icon *_docIcon = nullptr;
 	style::color _docIconColor;
@@ -656,6 +731,7 @@ private:
 	History *_migrated = nullptr;
 	History *_history = nullptr; // if conversation photos or files overview
 	MsgId _topicRootId = 0;
+	PeerId _monoforumPeerId = 0;
 	PeerData *_peer = nullptr;
 	UserData *_user = nullptr; // if user profile photos overview
 
@@ -700,9 +776,14 @@ private:
 	base::Timer _dropdownShowTimer;
 
 	base::unique_qptr<SponsoredButton> _sponsoredButton;
+	object_ptr<Ui::RoundButton> _voteButton = { nullptr };
+	object_ptr<Ui::RpWidget> _pollVotersWidget = { nullptr };
+	rpl::lifetime _pollUpdateLifetime;
 
 	bool _receiveMouse = true;
 	bool _processingKeyPress = false;
+	bool _clickHandlerActive = false;
+	bool _clickHandlerPressed = false;
 
 	bool _touchPress = false;
 	bool _touchMove = false;
@@ -718,6 +799,30 @@ private:
 	Ui::Animations::Simple _saveMsgAnimation;
 	base::Timer _saveMsgTimer;
 
+	QString _chapterText;
+	QRect _chapterRect;
+	Ui::Animations::Simple _chapterAnimation;
+	base::Timer _chapterTimer;
+	struct ChapterArrow {
+		Ui::Animations::Simple animation;
+		int direction = 0;
+	};
+	std::vector<std::unique_ptr<ChapterArrow>> _chapterArrows;
+
+	bool _speedBoostActive = false;
+	bool _speedBoostFromMouse = false;
+	float64 _speedBoostSavedSpeed = 1.;
+	float64 _speedBoostSpeed = 2.;
+	float64 _speedBoostDragAccum = 0.;
+	QRect _speedBoostRect;
+	Ui::Animations::Simple _speedBoostAnimation;
+	base::Timer _speedBoostHoldTimer;
+	base::Timer _frameStepThrottle;
+	int _frameStepPending = 0;
+	Ui::Animations::Basic _speedBoostTicker;
+	float64 _speedBoostPhase = 0.;
+	crl::time _speedBoostLastFrame = 0;
+
 	base::flat_map<Over, crl::time> _animations;
 	base::flat_map<Over, anim::value> _animationOpacities;
 
@@ -726,6 +831,13 @@ private:
 	rpl::event_stream<bool> _touchbarFullscreenToggled;
 
 	int _verticalWheelDelta = 0;
+
+	Platform::TextRecognition::Result _recognitionResult;
+	uint64 _recognitionPendingSessionUniqueId = 0;
+	PhotoId _recognitionPendingPhotoId = 0;
+	bool _recognitionRetryOnLarge = false;
+	bool _showRecognitionResults = false;
+	Ui::Animations::Simple _recognitionAnimation;
 
 	bool _themePreviewShown = false;
 	uint64 _themePreviewId = 0;

@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "tray.h"
+#include "tray_accounts_menu.h"
 
 #include "kotato/kotato_lang.h"
 #include "core/application.h"
@@ -30,7 +31,7 @@ void Tray::create() {
 
 	Core::App().settings().workModeValue(
 	) | rpl::combine_previous(
-	) | rpl::start_with_next([=](WorkMode previous, WorkMode state) {
+	) | rpl::on_next([=](WorkMode previous, WorkMode state) {
 		const auto wasHasIcon = (previous != WorkMode::WindowOnly);
 		const auto nowHasIcon = (state != WorkMode::WindowOnly);
 		if (wasHasIcon != nowHasIcon) {
@@ -43,17 +44,21 @@ void Tray::create() {
 	}, _tray.lifetime());
 
 	Core::App().settings().trayIconMonochromeChanges(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		updateIconCounters();
 	}, _tray.lifetime());
 
 	Core::App().passcodeLockChanges(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		rebuildMenu();
 	}, _tray.lifetime());
 
+	TrayAccountsMenu::SetupChangesSubscription(
+		[=] { rebuildMenu(); },
+		_tray.lifetime());
+
 	_tray.iconClicks(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		const auto skipTrayClick = (_lastTrayClickTime > 0)
 			&& (crl::now() - _lastTrayClickTime
 				< QApplication::doubleClickInterval());
@@ -108,6 +113,8 @@ void Tray::rebuildMenu() {
 	}
 
 	_tray.addAction(rktr("ktg_quit_from_tray"), [] { Core::Quit(); });
+
+	TrayAccountsMenu::Fill(_tray);
 
 	updateMenuText();
 }

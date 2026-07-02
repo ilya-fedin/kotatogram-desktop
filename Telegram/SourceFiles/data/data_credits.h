@@ -11,6 +11,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Data {
 
+struct UniqueGift;
+struct UniqueGiftValue;
+
 struct CreditTopupOption final {
 	uint64 credits = 0;
 	QString product;
@@ -37,6 +40,10 @@ struct CreditsHistoryEntry final {
 		return !id.isEmpty();
 	}
 
+	[[nodiscard]] bool isLiveStoryReaction() const {
+		return paidMessagesCount && reaction && !bareMsgId;
+	}
+
 	using PhotoId = uint64;
 	enum class PeerType {
 		Peer,
@@ -46,43 +53,95 @@ struct CreditsHistoryEntry final {
 		Unsupported,
 		PremiumBot,
 		Ads,
+		API,
 	};
 
 	QString id;
 	QString title;
 	TextWithEntities description;
 	QDateTime date;
+	QDateTime firstSaleDate;
+	QDateTime lastSaleDate;
 	PhotoId photoId = 0;
 	std::vector<CreditsHistoryMedia> extended;
-	uint64 credits = 0;
+	CreditsAmount credits;
 	uint64 bareMsgId = 0;
 	uint64 barePeerId = 0;
 	uint64 bareGiveawayMsgId = 0;
 	uint64 bareGiftStickerId = 0;
+	uint64 bareGiftOwnerId = 0;
+	uint64 bareGiftHostId = 0;
+	uint64 bareGiftReleasedById = 0;
+	uint64 bareGiftResaleRecipientId = 0;
+	uint64 bareActorId = 0;
+	uint64 bareEntryOwnerId = 0;
+	uint64 giftChannelSavedId = 0;
+	uint64 stargiftId = 0;
+	QString giftPrepayUpgradeHash;
+	QString giftTitle;
+	std::shared_ptr<UniqueGift> uniqueGift;
+	Fn<std::vector<CreditsHistoryEntry>()> pinnedSavedGifts;
+	uint64 nextToUpgradeStickerId = 0;
+	Fn<void()> nextToUpgradeShow;
+	Fn<void()> craftAnotherCallback;
+	CreditsAmount starrefAmount;
+	int starrefCommission = 0;
+	uint64 starrefRecipientId = 0;
 	PeerType peerType;
 	QDateTime subscriptionUntil;
+
+	// Currency properties.
+	QDateTime adsProceedsToDate;
+	QString provider; // Unused.
+
 	QDateTime successDate;
 	QString successLink;
+	int paidMessagesCount = 0;
+	CreditsAmount paidMessagesAmount;
+	int paidMessagesCommission = 0;
 	int limitedCount = 0;
 	int limitedLeft = 0;
-	int convertStars = 0;
-	bool converted = false;
-	bool anonymous = false;
-	bool savedToProfile = false;
-	bool fromGiftsList = false;
-	bool reaction = false;
-	bool refunded = false;
-	bool pending = false;
-	bool failed = false;
-	bool in = false;
-	bool gift = false;
+	int starsConverted = 0;
+	int starsToUpgrade = 0;
+	int starsUpgradedBySender = 0;
+	int starsForDetailsRemove = 0;
+	int premiumMonthsForStars = 0;
+	int floodSkip = 0;
+	int giftNumber = 0;
+	bool converted : 1 = false;
+	bool anonymous : 1 = false;
+	bool stargift : 1 = false;
+	bool auction : 1 = false;
+	bool postsSearch : 1 = false;
+	bool giftTransferred : 1 = false;
+	bool giftRefunded : 1 = false;
+	bool giftUpgraded : 1 = false;
+	bool giftUpgradeSeparate : 1 = false;
+	bool giftUpgradeGifted : 1 = false;
+	bool giftResale : 1 = false;
+	bool giftOffer : 1 = false;
+	bool giftResaleForceTon : 1 = false;
+	bool giftPinned : 1 = false;
+	bool giftCrafted : 1 = false;
+	bool savedToProfile : 1 = false;
+	bool fromGiftsList : 1 = false;
+	bool fromGiftSlug : 1 = false;
+	bool soldOutInfo : 1 = false;
+	bool canUpgradeGift : 1 = false;
+	bool hasGiftComment : 1 = false;
+	bool reaction : 1 = false;
+	bool refunded : 1 = false;
+	bool pending : 1 = false;
+	bool failed : 1 = false;
+	bool in : 1 = false;
+	bool gift : 1 = false;
 };
 
 struct CreditsStatusSlice final {
 	using OffsetToken = QString;
 	std::vector<CreditsHistoryEntry> list;
 	std::vector<SubscriptionEntry> subscriptions;
-	uint64 balance = 0;
+	CreditsAmount balance;
 	uint64 subscriptionsMissingBalance = 0;
 	bool allLoaded = false;
 	OffsetToken token;

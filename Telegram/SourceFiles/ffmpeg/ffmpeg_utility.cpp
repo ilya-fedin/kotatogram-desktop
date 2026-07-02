@@ -11,12 +11,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/algorithm.h"
 #include "logs.h"
 
-#if !defined TDESKTOP_USE_PACKAGED && !defined Q_OS_WIN && !defined Q_OS_MAC
+#if !defined Q_OS_WIN && !defined Q_OS_MAC
 #include "base/platform/linux/base_linux_library.h"
 #include <deque>
-#endif // !TDESKTOP_USE_PACKAGED && !Q_OS_WIN && !Q_OS_MAC
+#endif // !Q_OS_WIN && !Q_OS_MAC
 
 #include <QImage>
+#include <limits>
+#include <new>
 
 #ifdef LIB_FFMPEG_USE_QT_PRIVATE_API
 #include <private/qdrawhelper_p.h>
@@ -27,6 +29,16 @@ extern "C" {
 #include <libavutil/display.h>
 } // extern "C"
 
+#if !defined Q_OS_WIN && !defined Q_OS_MAC
+extern "C" {
+void _libvdpau_so_tramp_resolve_all(void) __attribute__((weak));
+void _libva_drm_so_tramp_resolve_all(void) __attribute__((weak));
+void _libva_x11_so_tramp_resolve_all(void) __attribute__((weak));
+void _libva_so_tramp_resolve_all(void) __attribute__((weak));
+void _libdrm_so_tramp_resolve_all(void) __attribute__((weak));
+} // extern "C"
+#endif // !Q_OS_WIN && !Q_OS_MAC
+
 namespace FFmpeg {
 namespace {
 
@@ -35,6 +47,9 @@ constexpr auto kAlignImageBy = 64;
 constexpr auto kImageFormat = QImage::Format_ARGB32_Premultiplied;
 constexpr auto kMaxScaleByAspectRatio = 16;
 constexpr auto kAvioBlockSize = 4096;
+constexpr auto kMaxFrameStorageBytes = 64 * 1024 * 1024;
+constexpr auto kMaxPixelsPaddingRatio = 32;
+constexpr auto kMaxPixelsFixedPadding = 64 * 1024;
 constexpr auto kTimeUnknown = std::numeric_limits<crl::time>::min();
 constexpr auto kDurationMax = crl::time(std::numeric_limits<int>::max());
 
@@ -47,9 +62,45 @@ struct HwAccelDescriptor {
 	AVPixelFormat format = AV_PIX_FMT_NONE;
 };
 
-void AlignedImageBufferCleanupHandler(void* data) {
+struct AlignedFrameStorageLayout {
+	int width = 0;
+	int height = 0;
+	int bytesPerLine = 0;
+	int totalBytes = 0;
+};
+
+void AlignedImageBufferCleanupHandler(void *data) {
 	const auto buffer = static_cast<uchar*>(data);
 	delete[] buffer;
+}
+
+[[nodiscard]] bool ComputeAlignedFrameStorageLayout(
+		QSize size,
+		AlignedFrameStorageLayout *out) {
+	const auto width = size.width();
+	const auto height = size.height();
+	if (width <= 0 || height <= 0) {
+		return false;
+	}
+	const auto widthAlign = kAlignImageBy / kPixelBytesSize;
+	const auto widthRemainder = width % widthAlign;
+	const auto widthPadding = widthRemainder
+		? (widthAlign - widthRemainder)
+		: 0;
+	const auto alignedWidth = int64_t(width) + widthPadding;
+	const auto bytesPerLine = int64_t(alignedWidth) * kPixelBytesSize;
+	if (bytesPerLine > kMaxFrameStorageBytes) {
+		return false;
+	}
+	const auto totalBytes = int64_t(bytesPerLine) * height + kAlignImageBy;
+	if (totalBytes > kMaxFrameStorageBytes) {
+		return false;
+	}
+	out->width = width;
+	out->height = height;
+	out->bytesPerLine = int(bytesPerLine);
+	out->totalBytes = int(totalBytes);
+	return true;
 }
 
 [[nodiscard]] bool IsValidAspectRatio(AVRational aspect) {
@@ -92,23 +143,24 @@ void PremultiplyLine(uchar *dst, const uchar *src, int intsCount) {
 #endif // LIB_FFMPEG_USE_QT_PRIVATE_API
 }
 
-#if !defined TDESKTOP_USE_PACKAGED && !defined Q_OS_WIN && !defined Q_OS_MAC
+#if !defined Q_OS_WIN && !defined Q_OS_MAC
 [[nodiscard]] auto CheckHwLibs() {
 	auto list = std::deque{
 		AV_PIX_FMT_CUDA,
 	};
-	if (base::Platform::LoadLibrary("libvdpau.so.1")) {
+	if (!_libvdpau_so_tramp_resolve_all
+			|| base::Platform::LoadLibrary("libvdpau.so.1")) {
 		list.push_front(AV_PIX_FMT_VDPAU);
 	}
 	if ([&] {
 		const auto list = std::array{
-			"libva-drm.so.2",
-			"libva-x11.so.2",
-			"libva.so.2",
-			"libdrm.so.2",
+			std::make_pair(_libva_drm_so_tramp_resolve_all, "libva-drm.so.2"),
+			std::make_pair(_libva_x11_so_tramp_resolve_all, "libva-x11.so.2"),
+			std::make_pair(_libva_so_tramp_resolve_all, "libva.so.2"),
+			std::make_pair(_libdrm_so_tramp_resolve_all, "libdrm.so.2"),
 		};
-		for (const auto lib : list) {
-			if (!base::Platform::LoadLibrary(lib)) {
+		for (const auto &lib : list) {
+			if (lib.first && !base::Platform::LoadLibrary(lib.second)) {
 				return false;
 			}
 		}
@@ -118,7 +170,7 @@ void PremultiplyLine(uchar *dst, const uchar *src, int intsCount) {
 	}
 	return list;
 }
-#endif // !TDESKTOP_USE_PACKAGED && !Q_OS_WIN && !Q_OS_MAC
+#endif // !Q_OS_WIN && !Q_OS_MAC
 
 [[nodiscard]] bool InitHw(AVCodecContext *context, AVHWDeviceType type) {
 	AVCodecContext *parent = static_cast<AVCodecContext*>(context->opaque);
@@ -161,9 +213,7 @@ void PremultiplyLine(uchar *dst, const uchar *src, int intsCount) {
 		}
 		return false;
 	};
-#if !defined TDESKTOP_USE_PACKAGED && !defined Q_OS_WIN && !defined Q_OS_MAC
-	static const auto list = CheckHwLibs();
-#else // !TDESKTOP_USE_PACKAGED && !Q_OS_WIN && !Q_OS_MAC
+#if defined Q_OS_WIN || defined Q_OS_MAC
 	const auto list = std::array{
 #ifdef Q_OS_WIN
 		AV_PIX_FMT_D3D11,
@@ -171,13 +221,11 @@ void PremultiplyLine(uchar *dst, const uchar *src, int intsCount) {
 		AV_PIX_FMT_CUDA,
 #elif defined Q_OS_MAC // Q_OS_WIN
 		AV_PIX_FMT_VIDEOTOOLBOX,
-#else // Q_OS_WIN || Q_OS_MAC
-		AV_PIX_FMT_VAAPI,
-		AV_PIX_FMT_VDPAU,
-		AV_PIX_FMT_CUDA,
 #endif // Q_OS_WIN || Q_OS_MAC
 	};
-#endif // TDESKTOP_USE_PACKAGED || Q_OS_WIN || Q_OS_MAC
+#else // Q_OS_WIN || Q_OS_MAC
+	static const auto list = CheckHwLibs();
+#endif // !Q_OS_WIN && !Q_OS_MAC
 	for (const auto format : list) {
 		if (!has(format)) {
 			continue;
@@ -285,10 +333,12 @@ FormatPointer MakeFormatPointer(
 		return {};
 	}
 	result->pb = io.get();
+	result->flags |= AVFMT_FLAG_CUSTOM_IO;
 
 	auto options = (AVDictionary*)nullptr;
 	const auto guard = gsl::finally([&] { av_dict_free(&options); });
 	av_dict_set(&options, "usetoc", "1", 0);
+
 	const auto error = AvErrorWrap(avformat_open_input(
 		&result,
 		nullptr,
@@ -302,6 +352,54 @@ FormatPointer MakeFormatPointer(
 	if (seek) {
 		result->flags |= AVFMT_FLAG_FAST_SEEK;
 	}
+
+	// Now FormatPointer will own and free the IO context.
+	io.release();
+	return FormatPointer(result);
+}
+
+FormatPointer MakeWriteFormatPointer(
+		void *opaque,
+		int(*read)(void *opaque, uint8_t *buffer, int bufferSize),
+#if DA_FFMPEG_CONST_WRITE_CALLBACK
+		int(*write)(void *opaque, const uint8_t *buffer, int bufferSize),
+#else
+		int(*write)(void *opaque, uint8_t *buffer, int bufferSize),
+#endif
+		int64_t(*seek)(void *opaque, int64_t offset, int whence),
+		const QByteArray &format) {
+	const AVOutputFormat *found = nullptr;
+	void *i = nullptr;
+	while ((found = av_muxer_iterate(&i))) {
+		if (found->name == format) {
+			break;
+		}
+	}
+	if (!found) {
+		LogError(
+			"av_muxer_iterate",
+			u"Format %1 not found"_q.arg(QString::fromUtf8(format)));
+		return {};
+	}
+
+	auto io = MakeIOPointer(opaque, read, write, seek);
+	if (!io) {
+		return {};
+	}
+	io->seekable = (seek != nullptr);
+
+	auto result = (AVFormatContext*)nullptr;
+	auto error = AvErrorWrap(avformat_alloc_output_context2(
+		&result,
+		(AVOutputFormat*)found,
+		nullptr,
+		nullptr));
+	if (!result || error) {
+		LogError("avformat_alloc_output_context2", error);
+		return {};
+	}
+	result->pb = io.get();
+	result->flags |= AVFMT_FLAG_CUSTOM_IO;
 
 	// Now FormatPointer will own and free the IO context.
 	io.release();
@@ -322,6 +420,12 @@ const AVCodec *FindDecoder(not_null<AVCodecContext*> context) {
 		: avcodec_find_decoder(context->codec_id);
 }
 
+int64_t MaxPixelsForAreaLimit(int64_t area) {
+	// Decoders may check internally padded frame dimensions against max_pixels,
+	// not just the visible frame size. Leave room for alignment/cropping slack.
+	return area + area / kMaxPixelsPaddingRatio + kMaxPixelsFixedPadding;
+}
+
 CodecPointer MakeCodecPointer(CodecDescriptor descriptor) {
 	auto error = AvErrorWrap();
 
@@ -338,6 +442,11 @@ CodecPointer MakeCodecPointer(CodecDescriptor descriptor) {
 		return {};
 	}
 	context->pkt_timebase = stream->time_base;
+	if ((descriptor.videoMaxArea > 0)
+		&& (context->codec_type == AVMEDIA_TYPE_VIDEO)) {
+		context->max_pixels = MaxPixelsForAreaLimit(
+			descriptor.videoMaxArea);
+	}
 	if(::Kotato::JsonSettings::GetBool("ffmpeg_multithread")) {
 		if (::Kotato::JsonSettings::GetInt("ffmpeg_thread_count") > 0) {
 			av_opt_set(context, "threads", std::to_string(::Kotato::JsonSettings::GetInt("ffmpeg_thread_count")).c_str(), 0);
@@ -455,21 +564,94 @@ SwscalePointer MakeSwscalePointer(
 		existing);
 }
 
+void SwresampleDeleter::operator()(SwrContext *value) {
+	if (value) {
+		swr_free(&value);
+	}
+}
+
+SwresamplePointer MakeSwresamplePointer(
+		AVChannelLayout *srcLayout,
+		AVSampleFormat srcFormat,
+		int srcRate,
+		AVChannelLayout *dstLayout,
+		AVSampleFormat dstFormat,
+		int dstRate,
+		SwresamplePointer *existing) {
+	// We have to use custom caching for SwsContext, because
+	// sws_getCachedContext checks passed flags with existing context flags,
+	// and re-creates context if they're different, but in the process of
+	// context creation the passed flags are modified before being written
+	// to the resulting context, so the caching doesn't work.
+	if (existing && (*existing) != nullptr) {
+		const auto &deleter = existing->get_deleter();
+		if (srcLayout->nb_channels == deleter.srcChannels
+			&& dstLayout->nb_channels == deleter.dstChannels
+			&& srcFormat == deleter.srcFormat
+			&& dstFormat == deleter.dstFormat
+			&& srcRate == deleter.srcRate
+			&& dstRate == deleter.dstRate) {
+			return std::move(*existing);
+		}
+	}
+
+	// Initialize audio resampler
+	auto result = (SwrContext*)nullptr;
+	auto error = AvErrorWrap(swr_alloc_set_opts2(
+		&result,
+		dstLayout,
+		dstFormat,
+		dstRate,
+		srcLayout,
+		srcFormat,
+		srcRate,
+		0,
+		nullptr));
+	if (error || !result) {
+		LogError(u"swr_alloc_set_opts2"_q, error);
+		return SwresamplePointer();
+	}
+
+	error = AvErrorWrap(swr_init(result));
+	if (error) {
+		LogError(u"swr_init"_q, error);
+		swr_free(&result);
+		return SwresamplePointer();
+	}
+
+	return SwresamplePointer(
+		result,
+		{
+			srcFormat,
+			srcRate,
+			srcLayout->nb_channels,
+			dstFormat,
+			dstRate,
+			dstLayout->nb_channels,
+		});
+}
+
 void SwscaleDeleter::operator()(SwsContext *value) {
 	if (value) {
 		sws_freeContext(value);
 	}
 }
 
-void LogError(const QString &method) {
-	LOG(("Streaming Error: Error in %1.").arg(method));
+void LogError(const QString &method, const QString &details) {
+	LOG(("Streaming Error: Error in %1%2."
+		).arg(method
+		).arg(details.isEmpty() ? QString() : " - " + details));
 }
 
-void LogError(const QString &method, AvErrorWrap error) {
-	LOG(("Streaming Error: Error in %1 (code: %2, text: %3)."
+void LogError(
+		const QString &method,
+		AvErrorWrap error,
+		const QString &details) {
+	LOG(("Streaming Error: Error in %1 (code: %2, text: %3)%4."
 		).arg(method
 		).arg(error.code()
-		).arg(error.text()));
+		).arg(error.text()
+		).arg(details.isEmpty() ? QString() : " - " + details));
 }
 
 crl::time PtsToTime(int64_t pts, AVRational timeBase) {
@@ -519,13 +701,14 @@ int DurationByPacket(const Packet &packet, AVRational timeBase) {
 }
 
 int ReadRotationFromMetadata(not_null<AVStream*> stream) {
-	const auto displaymatrix = av_stream_get_side_data(
-		stream,
-		AV_PKT_DATA_DISPLAYMATRIX,
-		nullptr);
+	const auto displaymatrix = av_packet_side_data_get(
+		stream->codecpar->coded_side_data,
+		stream->codecpar->nb_coded_side_data,
+		AV_PKT_DATA_DISPLAYMATRIX);
 	auto theta = 0;
 	if (displaymatrix) {
-		theta = -round(av_display_rotation_get((int32_t*)displaymatrix));
+		const auto matrix = (int32_t*)displaymatrix->data;
+		theta = -round(av_display_rotation_get(matrix));
 	}
 	theta -= 360 * floor(theta / 360 + 0.9 / 360);
 	const auto result = int(base::SafeRound(theta));
@@ -560,27 +743,26 @@ bool GoodStorageForFrame(const QImage &storage, QSize size) {
 
 // Create a QImage of desired size where all the data is properly aligned.
 QImage CreateFrameStorage(QSize size) {
-	const auto width = size.width();
-	const auto height = size.height();
-	const auto widthAlign = kAlignImageBy / kPixelBytesSize;
-	const auto neededWidth = width + ((width % widthAlign)
-		? (widthAlign - (width % widthAlign))
-		: 0);
-	const auto perLine = neededWidth * kPixelBytesSize;
-	const auto buffer = new uchar[perLine * height + kAlignImageBy];
-	const auto cleanupData = static_cast<void *>(buffer);
+	auto layout = AlignedFrameStorageLayout();
+	if (!ComputeAlignedFrameStorageLayout(size, &layout)) {
+		return {};
+	}
+	const auto buffer = new (std::nothrow) uchar[layout.totalBytes];
+	if (!buffer) {
+		return {};
+	}
 	const auto address = reinterpret_cast<uintptr_t>(buffer);
 	const auto alignedBuffer = buffer + ((address % kAlignImageBy)
 		? (kAlignImageBy - (address % kAlignImageBy))
 		: 0);
 	return QImage(
 		alignedBuffer,
-		width,
-		height,
-		perLine,
+		layout.width,
+		layout.height,
+		layout.bytesPerLine,
 		kImageFormat,
 		AlignedImageBufferCleanupHandler,
-		cleanupData);
+		buffer);
 }
 
 void UnPremultiply(QImage &dst, const QImage &src) {
@@ -588,21 +770,32 @@ void UnPremultiply(QImage &dst, const QImage &src) {
 	// as an image in QImage::Format_ARGB32 format.
 	if (!GoodStorageForFrame(dst, src.size())) {
 		dst = CreateFrameStorage(src.size());
+		if (dst.isNull()) {
+			return;
+		}
 	}
 	const auto srcPerLine = src.bytesPerLine();
 	const auto dstPerLine = dst.bytesPerLine();
 	const auto width = src.width();
 	const auto height = src.height();
+	if (width <= 0 || height <= 0) {
+		return;
+	}
+	const auto packedLine = int64_t(width) * kPixelBytesSize;
+	const auto packedCount = int64_t(width) * height;
+	const auto fast = (srcPerLine == packedLine)
+		&& (dstPerLine == packedLine)
+		&& (packedCount <= kMaxFrameStorageBytes);
 	auto srcBytes = src.bits();
 	auto dstBytes = dst.bits();
-	if (srcPerLine != width * 4 || dstPerLine != width * 4) {
+	if (!fast) {
 		for (auto i = 0; i != height; ++i) {
 			UnPremultiplyLine(dstBytes, srcBytes, width);
 			srcBytes += srcPerLine;
 			dstBytes += dstPerLine;
 		}
 	} else {
-		UnPremultiplyLine(dstBytes, srcBytes, width * height);
+		UnPremultiplyLine(dstBytes, srcBytes, int(packedCount));
 	}
 }
 
@@ -610,14 +803,21 @@ void PremultiplyInplace(QImage &image) {
 	const auto perLine = image.bytesPerLine();
 	const auto width = image.width();
 	const auto height = image.height();
+	if (width <= 0 || height <= 0) {
+		return;
+	}
+	const auto packedLine = int64_t(width) * kPixelBytesSize;
+	const auto packedCount = int64_t(width) * height;
+	const auto fast = (perLine == packedLine)
+		&& (packedCount <= kMaxFrameStorageBytes);
 	auto bytes = image.bits();
-	if (perLine != width * 4) {
+	if (!fast) {
 		for (auto i = 0; i != height; ++i) {
 			PremultiplyLine(bytes, bytes, width);
 			bytes += perLine;
 		}
 	} else {
-		PremultiplyLine(bytes, bytes, width * height);
+		PremultiplyLine(bytes, bytes, int(packedCount));
 	}
 }
 

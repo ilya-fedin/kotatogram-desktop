@@ -9,13 +9,23 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "history/history_location_manager.h"
 
+#include <memory>
+
 struct HistoryItemCommonFields;
+
+namespace Data {
+struct SendError;
+} // namespace Data
 
 namespace Main {
 class Session;
 } // namespace Main
 
 class History;
+
+namespace Iv {
+struct RichPage;
+} // namespace Iv
 
 namespace InlineBots {
 
@@ -40,11 +50,11 @@ public:
 
 	virtual bool isValid() const = 0;
 
-	virtual void addToHistory(
+	virtual not_null<HistoryItem*> makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const = 0;
-	virtual QString getErrorOnSend(
+	virtual Data::SendError getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const = 0;
 
@@ -75,12 +85,12 @@ public:
 	};
 	virtual SentMessageFields getSentMessageFields() const = 0;
 
-	void addToHistory(
+	not_null<HistoryItem*> makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const override;
 
-	QString getErrorOnSend(
+	Data::SendError getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const override;
 
@@ -108,6 +118,31 @@ public:
 private:
 	QString _message;
 	EntitiesInText _entities;
+
+};
+
+class SendRichMessage final : public SendData {
+public:
+	SendRichMessage(
+		not_null<Main::Session*> session,
+		const MTPRichMessage &message);
+
+	bool isValid() const override;
+
+	not_null<HistoryItem*> makeMessage(
+		const Result *owner,
+		not_null<History*> history,
+		HistoryItemCommonFields &&fields) const override;
+
+	Data::SendError getErrorOnSend(
+		const Result *owner,
+		not_null<History*> history) const override;
+
+	QString getLayoutDescription(const Result *owner) const override;
+
+private:
+	std::shared_ptr<const Iv::RichPage> _page;
+	TextWithEntities _summary;
 
 };
 
@@ -236,12 +271,12 @@ public:
 		return _photo != nullptr;
 	}
 
-	void addToHistory(
+	not_null<HistoryItem*> makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const override;
 
-	QString getErrorOnSend(
+	Data::SendError getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const override;
 
@@ -270,12 +305,12 @@ public:
 		return _document != nullptr;
 	}
 
-	void addToHistory(
+	not_null<HistoryItem*> makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const override;
 
-	QString getErrorOnSend(
+	Data::SendError getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const override;
 
@@ -298,12 +333,12 @@ public:
 		return _game != nullptr;
 	}
 
-	void addToHistory(
+	not_null<HistoryItem*> makeMessage(
 		const Result *owner,
 		not_null<History*> history,
 		HistoryItemCommonFields &&fields) const override;
 
-	QString getErrorOnSend(
+	Data::SendError getErrorOnSend(
 		const Result *owner,
 		not_null<History*> history) const override;
 

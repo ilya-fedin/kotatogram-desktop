@@ -96,7 +96,7 @@ void Account::watchProxyChanges() {
 	using ProxyChange = Core::Application::ProxyChange;
 
 	Core::App().proxyChanges(
-	) | rpl::start_with_next([=](const ProxyChange &change) {
+	) | rpl::on_next([=](const ProxyChange &change) {
 		const auto key = [&](const MTP::ProxyData &proxy) {
 			return (proxy.type == MTP::ProxyData::Type::Mtproto)
 				? std::make_pair(proxy.host, proxy.port)
@@ -116,7 +116,7 @@ void Account::watchProxyChanges() {
 
 void Account::watchSessionChanges() {
 	sessionChanges(
-	) | rpl::start_with_next([=](Session *session) {
+	) | rpl::on_next([=](Session *session) {
 		if (!session && _mtp) {
 			_mtp->setUserPhone(QString());
 		}
@@ -171,10 +171,12 @@ void Account::createSession(
 			MTPstring(), // lang_code
 			MTPEmojiStatus(),
 			MTPVector<MTPUsername>(),
-			MTPint(), // stories_max_id
+			MTPRecentStory(),
 			MTPPeerColor(), // color
 			MTPPeerColor(), // profile_color
-			MTPint()), // bot_active_users
+			MTPint(), // bot_active_users
+			MTPlong(), // bot_verification_icon
+			MTPlong()), // send_paid_messages_stars
 		serialized,
 		streamVersion,
 		std::move(settings));
@@ -431,7 +433,7 @@ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
 	_mtp->writeKeysRequests(
 	) | rpl::filter([=] {
 		return !*writingKeys;
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		*writingKeys = true;
 		Ui::PostponeCall(_mtp.get(), [=] {
 			local().writeMtpData();
@@ -445,7 +447,7 @@ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
 		_mtp->dcOptions().changed() | rpl::to_empty
 	) | rpl::filter([=] {
 		return !*writingConfig;
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		*writingConfig = true;
 		Ui::PostponeCall(_mtp.get(), [=] {
 			local().writeMtpConfig();
@@ -466,6 +468,7 @@ void Account::startMtp(std::unique_ptr<MTP::Config> config) {
 	_mtp->setStateChangedHandler([=](MTP::ShiftedDcId dc, int32 state) {
 		if (dc == _mtp->mainDcId()) {
 			Core::App().settings().proxy().connectionTypeChangesNotify();
+			Core::App().checkProxyRotation(this, state);
 		}
 	});
 	_mtp->setSessionResetHandler([=](MTP::ShiftedDcId shiftedDcId) {
@@ -573,11 +576,11 @@ void Account::destroyMtpKeys(MTP::AuthKeysList &&keys) {
 		MTP::Instance::Mode::KeysDestroyer,
 		std::move(destroyFields));
 	_mtpForKeysDestroy->writeKeysRequests(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		local().writeMtpData();
 	}, _mtpForKeysDestroy->lifetime());
 	_mtpForKeysDestroy->allKeysDestroyed(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		LOG(("MTP Info: all keys scheduled for destroy are destroyed."));
 		crl::on_main(this, [=] {
 			_mtpForKeysDestroy = nullptr;

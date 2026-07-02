@@ -8,8 +8,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "base/qt/qt_compare.h"
+#include "core/credits_amount.h"
 #include "data/data_peer_id.h"
 #include "ui/text/text_entity.h"
+
+#ifdef _DEBUG
+#include <QtCore/QDebug>
+#endif // _DEBUG
 
 struct MsgId {
 	constexpr MsgId() noexcept = default;
@@ -86,7 +91,9 @@ constexpr auto SpecialMsgIdShift = EndStoryMsgId.bare;
 constexpr auto ShowAtTheEndMsgId = MsgId(SpecialMsgIdShift + 1);
 constexpr auto SwitchAtTopMsgId = MsgId(SpecialMsgIdShift + 2);
 constexpr auto ShowAndStartBotMsgId = MsgId(SpecialMsgIdShift + 4);
+constexpr auto ShowAndMaybeStartBotMsgId = MsgId(SpecialMsgIdShift + 5);
 constexpr auto ShowForChooseMessagesMsgId = MsgId(SpecialMsgIdShift + 6);
+constexpr auto kSearchQueryOffsetHint = -1;
 
 static_assert(SpecialMsgIdShift + 0xFF < 0);
 static_assert(-(SpecialMsgIdShift + 0xFF) > ServerMaxMsgId);
@@ -105,7 +112,7 @@ static_assert(-(SpecialMsgIdShift + 0xFF) > ServerMaxMsgId);
 	return MsgId(StartClientMsgId.bare + index);
 }
 
-[[nodiscrd]] constexpr inline bool IsStoryMsgId(MsgId id) noexcept {
+[[nodiscard]] constexpr inline bool IsStoryMsgId(MsgId id) noexcept {
 	return (id >= StartStoryMsgId && id < EndStoryMsgId);
 }
 [[nodiscard]] constexpr inline StoryId StoryIdFromMsgId(MsgId id) noexcept {
@@ -156,23 +163,82 @@ struct FullMsgId {
 	MsgId msg = 0;
 };
 
+#ifdef _DEBUG
+inline QDebug operator<<(QDebug debug, const FullMsgId &fullMsgId) {
+	debug.nospace()
+		<< "FullMsgId(peer: "
+		<< fullMsgId.peer.value
+		<< ", msg: "
+		<< fullMsgId.msg.bare
+		<< ")";
+	return debug;
+}
+#endif // _DEBUG
+
 Q_DECLARE_METATYPE(FullMsgId);
+
+struct MessageHighlightId {
+	TextWithEntities quote;
+	int quoteOffset = 0;
+	int todoItemId = 0;
+	QByteArray pollOption;
+
+	[[nodiscard]] bool empty() const {
+		return quote.empty() && !todoItemId && pollOption.isEmpty();
+	}
+	[[nodiscard]] friend inline bool operator==(
+		const MessageHighlightId &a,
+		const MessageHighlightId &b) = default;
+};
 
 struct FullReplyTo {
 	FullMsgId messageId;
 	TextWithEntities quote;
 	FullStoryId storyId;
 	MsgId topicRootId = 0;
+	PeerId monoforumPeerId = 0;
 	int quoteOffset = 0;
+	int todoItemId = 0;
+	QByteArray pollOption;
 
-	[[nodiscard]] bool valid() const {
+	[[nodiscard]] MessageHighlightId highlight() const {
+		return { quote, quoteOffset, todoItemId, pollOption };
+	}
+	[[nodiscard]] bool replying() const {
 		return messageId || (storyId && storyId.peer);
 	}
 	explicit operator bool() const {
-		return valid();
+		return replying() || monoforumPeerId;
 	}
 	friend inline auto operator<=>(FullReplyTo, FullReplyTo) = default;
 	friend inline bool operator==(FullReplyTo, FullReplyTo) = default;
+};
+
+struct SuggestOptions {
+	uint32 exists : 1 = 0;
+	uint32 priceWhole : 31 = 0;
+	uint32 priceNano : 31 = 0;
+	uint32 ton : 1 = 0;
+	TimeId date = 0;
+	TimeId offerDuration = 0;
+
+	[[nodiscard]] CreditsAmount price() const {
+		return CreditsAmount(
+			priceWhole,
+			priceNano,
+			ton ? CreditsType::Ton : CreditsType::Stars);
+	}
+
+	explicit operator bool() const {
+		return exists != 0;
+	}
+
+	friend inline auto operator<=>(
+		SuggestOptions,
+		SuggestOptions) = default;
+	friend inline bool operator==(
+		SuggestOptions,
+		SuggestOptions) = default;
 };
 
 struct GlobalMsgId {
@@ -206,6 +272,15 @@ struct hash<FullStoryId> {
 		return QtPrivate::QHashCombine().operator()(
 			std::hash<BareId>()(value.peer.value),
 			value.story);
+	}
+};
+
+template <>
+struct hash<FullMsgId> {
+	size_t operator()(FullMsgId value) const {
+		return QtPrivate::QHashCombine().operator()(
+			std::hash<BareId>()(value.peer.value),
+			value.msg.bare);
 	}
 };
 

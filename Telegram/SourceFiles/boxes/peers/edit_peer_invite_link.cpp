@@ -12,20 +12,24 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/unixtime.h"
 #include "boxes/gift_premium_box.h"
 #include "boxes/peer_list_box.h"
+#include "boxes/peer_list_controllers.h"
 #include "boxes/share_box.h"
 #include "core/application.h"
-#include "core/ui_integration.h" // Core::MarkedTextContext.
+#include "core/ui_integration.h" // TextContext
 #include "data/components/credits.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
+#include "data/data_forum_topic.h"
 #include "data/data_histories.h"
 #include "data/data_peer.h"
+#include "data/data_saved_sublist.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "history/history.h"
-#include "history/history_item_helpers.h" // GetErrorTextForSending.
+#include "history/history_item_helpers.h" // GetErrorForSending.
 #include "history/view/history_view_group_call_bar.h" // GenerateUserpics...
+#include "info/channel_statistics/earn/earn_icons.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "qr/qr_generate.h"
@@ -39,6 +43,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/userpic_button.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
+#include "ui/text/custom_emoji_helper.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
@@ -51,6 +56,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "styles/style_boxes.h"
 #include "styles/style_credits.h"
+#include "styles/style_dialogs.h"
 #include "styles/style_giveaway.h"
 #include "styles/style_info.h"
 #include "styles/style_layers.h" // st::boxDividerLabel.
@@ -67,6 +73,7 @@ constexpr auto kFirstPage = 20;
 constexpr auto kPerPage = 100;
 // constexpr auto kShareQrSize = 768;
 // constexpr auto kShareQrPadding = 16;
+constexpr auto kMaxShownJoined = 3;
 
 using LinkData = Api::InviteLink;
 
@@ -243,6 +250,9 @@ private:
 	const Role _role = Role::Joined;
 	rpl::variable<LinkData> _data;
 
+	Ui::Text::CustomEmojiHelper _emojiHelper;
+	TextWithEntities _creditsEmoji;
+
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	rpl::event_stream<Processed> _processed;
 
@@ -264,8 +274,9 @@ private:
 class SingleRowController final : public PeerListController {
 public:
 	SingleRowController(
-		not_null<PeerData*> peer,
-		rpl::producer<QString> status);
+		not_null<Data::Thread*> thread,
+		rpl::producer<QString> status,
+		Fn<void()> clicked);
 
 	void prepare() override;
 	void loadMoreRows() override;
@@ -273,8 +284,10 @@ public:
 	Main::Session &session() const override;
 
 private:
-	const not_null<PeerData*> _peer;
+	const not_null<Main::Session*> _session;
+	const base::weak_ptr<Data::Thread> _thread;
 	rpl::producer<QString> _status;
+	Fn<void()> _clicked;
 	rpl::lifetime _lifetime;
 
 };
@@ -367,11 +380,11 @@ void QrBox(
 	const auto button = Ui::CreateChild<Ui::AbstractButton>(container);
 	button->resize(size, size);
 	button->paintRequest(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		QPainter(button).drawImage(QRect(0, 0, size, size), qr);
 	}, button->lifetime());
 	container->widthValue(
-	) | rpl::start_with_next([=](int width) {
+	) | rpl::on_next([=](int width) {
 		button->move((width - size) / 2, st::inviteLinkQrSkip);
 	}, button->lifetime());
 	button->setClickedCallback(copyCallback);
@@ -401,6 +414,8 @@ Controller::Controller(
 	const auto current = _data.current();
 	_link = current.link;
 	_revoked = current.revoked;
+	_creditsEmoji = _emojiHelper.paletteDependent(
+		Ui::Earn::IconCreditsEmoji());
 }
 
 rpl::producer<LinkData> Controller::dataValue() const {
@@ -417,7 +432,7 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 	const auto revoked = current.revoked;
 	const auto link = current.link;
 	const auto admin = current.admin;
-	const auto weak = Ui::MakeWeak(container);
+	const auto weak = base::make_weak(container);
 	const auto copyLink = crl::guard(weak, [=] {
 		CopyInviteLink(delegate()->peerListUiShow(), link);
 	});
@@ -492,7 +507,7 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 		st::inviteLinkFieldPadding);
 
 	label->clicks(
-	) | rpl::start_with_next(copyLink, label->lifetime());
+	) | rpl::on_next(copyLink, label->lifetime());
 
 	const auto reactivateWrap = container->add(
 		object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
@@ -552,7 +567,7 @@ void Controller::addHeaderBlock(not_null<Ui::VerticalLayout*> container) {
 	Ui::AddSkip(container);
 
 	dataValue(
-	) | rpl::start_with_next([=](const LinkData &data) {
+	) | rpl::on_next([=](const LinkData &data) {
 		const auto now = base::unixtime::now();
 		const auto expired = IsExpiredLink(data, now);
 		reactivateWrap->toggle(
@@ -627,7 +642,7 @@ not_null<Ui::SlideWrap<>*> Controller::addRequestedListBlock(
 	controller->setDelegate(delegate);
 
 	controller->processed(
-	) | rpl::start_with_next([=](Processed processed) {
+	) | rpl::on_next([=](Processed processed) {
 		updateWithProcessed(processed);
 	}, lifetime());
 
@@ -718,33 +733,30 @@ void Controller::setupAboveJoinedWidget() {
 				? tr::lng_group_invite_subscription_info_title(
 					tr::now,
 					lt_emoji,
-					session().data().customEmojiManager().creditsEmoji(),
+					_creditsEmoji,
 					lt_price,
 					{ QString::number(current.subscription.credits) },
 					lt_multiplier,
 					TextWithEntities{ .text = QString(QChar(0x00D7)) },
 					lt_total,
 					{ QString::number(current.usage) },
-					Ui::Text::WithEntities)
+					tr::marked)
 				: tr::lng_group_invite_subscription_info_title_none(
 					tr::now,
 					lt_emoji,
-					session().data().customEmojiManager().creditsEmoji(),
+					_creditsEmoji,
 					lt_price,
 					{ QString::number(current.subscription.credits) },
-					Ui::Text::WithEntities),
+					tr::marked),
 			kMarkupTextOptions,
-			Core::MarkedTextContext{
-				.session = &session(),
-				.customEmojiRepaint = [=] { widget->update(); },
-			});
+			_emojiHelper.context([=] { widget->update(); }));
 		auto &lifetime = widget->lifetime();
 		const auto rateValue = lifetime.make_state<rpl::variable<float64>>(
 			session().credits().rateValue(_peer));
 		const auto currency = u"USD"_q;
 		const auto allCredits = current.subscription.credits * current.usage;
 		widget->paintRequest(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			auto p = Painter(widget);
 			p.setBrush(Qt::NoBrush);
 			p.setPen(st.nameFg);
@@ -853,7 +865,7 @@ void Controller::setupAboveJoinedWidget() {
 		std::move(remainingText),
 		st::inviteLinkTitleRight);
 	dataValue(
-	) | rpl::start_with_next([=](const LinkData &data) {
+	) | rpl::on_next([=](const LinkData &data) {
 		remaining->setTextColorOverride(
 			(data.usageLimit && (data.usageLimit <= data.usage)
 				? std::make_optional(st::boxTextFgError->c)
@@ -871,7 +883,7 @@ void Controller::setupAboveJoinedWidget() {
 		listTitle->positionValue(),
 		remaining->widthValue(),
 		listHeader->widthValue()
-	) | rpl::start_with_next([=](
+	) | rpl::on_next([=](
 			QPoint position,
 			int width,
 			int outerWidth) {
@@ -891,11 +903,11 @@ void Controller::loadMoreRows() {
 	_requestId = _api.request(MTPmessages_GetChatInviteImporters(
 		MTP_flags(Flag::f_link
 			| (_role == Role::Requested ? Flag::f_requested : Flag(0))),
-		_peer->input,
+		_peer->input(),
 		MTP_string(_link),
 		MTPstring(), // q
 		MTP_int(_lastUser ? _lastUser->date : 0),
-		_lastUser ? _lastUser->user->inputUser : MTP_inputUserEmpty(),
+		_lastUser ? _lastUser->user->inputUser() : MTP_inputUserEmpty(),
 		MTP_int(_lastUser ? kPerPage : kFirstPage)
 	)).done([=](const MTPmessages_ChatInviteImporters &result) {
 		_requestId = 0;
@@ -956,52 +968,46 @@ void Controller::rowClicked(not_null<PeerListRow*> row) {
 		Ui::AddSkip(content);
 		Ui::AddSkip(content);
 
-		const auto &stUser = st::boostReplaceUserpic;
+		const auto photoSize = st::boostReplaceUserpic.photoSize;
 		const auto session = &row->peer()->session();
-		content->add(object_ptr<Ui::CenterWrap<>>(
-			content,
-			object_ptr<Ui::UserpicButton>(content, channel, stUser))
-		)->setAttribute(Qt::WA_TransparentForMouseEvents);
+		content->add(
+			Settings::SubscriptionUserpic(content, channel, photoSize),
+			style::al_top);
 
 		Ui::AddSkip(content);
 		Ui::AddSkip(content);
 
-		box->addRow(object_ptr<Ui::CenterWrap<>>(
-			box,
+		box->addRow(
 			object_ptr<Ui::FlatLabel>(
 				box,
 				tr::lng_credits_box_subscription_title(),
-				st::creditsBoxAboutTitle)));
+				st::creditsBoxAboutTitle),
+			style::al_top);
 
 		Ui::AddSkip(content);
 
 		const auto subtitle1 = box->addRow(
-			object_ptr<Ui::CenterWrap<Ui::FlatLabel>>(
+			object_ptr<Ui::FlatLabel>(
 				box,
-				object_ptr<Ui::FlatLabel>(
-					box,
-					st::creditsTopupPrice)))->entity();
+				st::creditsTopupPrice),
+			style::al_top);
 		subtitle1->setMarkedText(
 			tr::lng_credits_subscription_subtitle(
 				tr::now,
 				lt_emoji,
-				session->data().customEmojiManager().creditsEmoji(),
+				_creditsEmoji,
 				lt_cost,
 				{ QString::number(data.subscription.credits) },
-				Ui::Text::WithEntities),
-			Core::MarkedTextContext{
-				.session = session,
-				.customEmojiRepaint = [=] { subtitle1->update(); },
-			});
+				tr::marked),
+			_emojiHelper.context());
 		const auto subtitle2 = box->addRow(
-			object_ptr<Ui::CenterWrap<Ui::FlatLabel>>(
+			object_ptr<Ui::FlatLabel>(
 				box,
-				object_ptr<Ui::FlatLabel>(
-					box,
-					st::creditsTopupPrice)))->entity();
+				st::creditsTopupPrice),
+			style::al_top);
 		session->credits().rateValue(
 			channel
-		) | rpl::start_with_next([=, currency = u"USD"_q](float64 rate) {
+		) | rpl::on_next([=, currency = u"USD"_q](float64 rate) {
 			subtitle2->setText(
 				tr::lng_credits_subscriber_subtitle(
 					tr::now,
@@ -1014,33 +1020,26 @@ void Controller::rowClicked(not_null<PeerListRow*> row) {
 		Ui::AddSkip(content);
 		Ui::AddSkip(content);
 
-		AddSubscriberEntryTable(controller, content, row->peer(), data.date);
+		const auto show = controller->uiShow();
+		AddSubscriberEntryTable(show, content, {}, row->peer(), data.date);
 
 		Ui::AddSkip(content);
 		Ui::AddSkip(content);
 
-		box->addRow(object_ptr<Ui::CenterWrap<>>(
-			box,
+		box->addRow(
 			object_ptr<Ui::FlatLabel>(
 				box,
 				tr::lng_credits_box_out_about(
 					lt_link,
-					tr::lng_payments_terms_link(
-					) | Ui::Text::ToLink(
-						tr::lng_credits_box_out_about_link(tr::now)),
-					Ui::Text::WithEntities),
-				st::creditsBoxAboutDivider)));
+					tr::lng_payments_terms_link(tr::url(
+						tr::lng_credits_box_out_about_link(tr::now))),
+					tr::marked),
+				st::creditsBoxAboutDivider),
+			style::al_top);
 
-		const auto button = box->addButton(tr::lng_box_ok(), [=] {
+		box->addButton(tr::lng_box_ok(), [=] {
 			box->closeBox();
 		});
-		const auto buttonWidth = st::boxWidth
-			- rect::m::sum::h(st::giveawayGiftCodeBox.buttonPadding);
-		button->widthValue() | rpl::filter([=] {
-			return (button->widthNoMargins() != buttonWidth);
-		}) | rpl::start_with_next([=] {
-			button->resizeToWidth(buttonWidth);
-		}, button->lifetime());
 	}));
 }
 
@@ -1104,8 +1103,8 @@ void Controller::processRequest(
 				: tr::lng_group_requests_was_added)(
 					tr::now,
 					lt_user,
-					Ui::Text::Bold(user->name()),
-					Ui::Text::WithEntities));
+					tr::bold(user->name()),
+					tr::marked));
 		}
 	});
 	const auto fail = crl::guard(this, [=] {
@@ -1145,36 +1144,62 @@ int Controller::descriptionTopSkipMin() const {
 }
 
 SingleRowController::SingleRowController(
-	not_null<PeerData*> peer,
-	rpl::producer<QString> status)
-: _peer(peer)
-, _status(std::move(status)) {
+	not_null<Data::Thread*> thread,
+	rpl::producer<QString> status,
+	Fn<void()> clicked)
+: _session(&thread->session())
+, _thread(thread)
+, _status(std::move(status))
+, _clicked(std::move(clicked)) {
 }
 
 void SingleRowController::prepare() {
-	auto row = std::make_unique<PeerListRow>(_peer);
-
+	const auto strong = _thread.get();
+	if (!strong) {
+		return;
+	}
+	const auto topic = strong->asTopic();
+	const auto sublist = strong->asSublist();
+	auto row = topic
+		? ChooseTopicBoxController::MakeRow(topic)
+		: sublist
+		? std::make_unique<PeerListRow>(sublist->sublistPeer())
+		: std::make_unique<PeerListRow>(strong->peer());
 	const auto raw = row.get();
-	std::move(
-		_status
-	) | rpl::start_with_next([=](const QString &status) {
-		raw->setCustomStatus(status);
-		delegate()->peerListUpdateRow(raw);
-	}, _lifetime);
-
+	if (_status) {
+		std::move(
+			_status
+		) | rpl::on_next([=](const QString &status) {
+			raw->setCustomStatus(status);
+			delegate()->peerListUpdateRow(raw);
+		}, _lifetime);
+	}
 	delegate()->peerListAppendRow(std::move(row));
 	delegate()->peerListRefreshRows();
+
+	if (topic) {
+		topic->destroyed() | rpl::on_next([=] {
+			while (delegate()->peerListFullRowsCount()) {
+				delegate()->peerListRemoveRow(delegate()->peerListRowAt(0));
+			}
+			delegate()->peerListRefreshRows();
+		}, _lifetime);
+	}
 }
 
 void SingleRowController::loadMoreRows() {
 }
 
 void SingleRowController::rowClicked(not_null<PeerListRow*> row) {
-	ShowPeerInfoSync(row->peer());
+	if (const auto onstack = _clicked) {
+		onstack();
+	} else {
+		ShowPeerInfoSync(row->peer());
+	}
 }
 
 Main::Session &SingleRowController::session() const {
-	return _peer->session();
+	return *_session;
 }
 
 } // namespace
@@ -1187,14 +1212,29 @@ bool IsExpiredLink(const Api::InviteLink &data, TimeId now) {
 void AddSinglePeerRow(
 		not_null<Ui::VerticalLayout*> container,
 		not_null<PeerData*> peer,
-		rpl::producer<QString> status) {
+		rpl::producer<QString> status,
+		Fn<void()> clicked) {
+	AddSinglePeerRow(
+		container,
+		peer->owner().history(peer),
+		std::move(status),
+		std::move(clicked));
+}
+
+void AddSinglePeerRow(
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Data::Thread*> thread,
+		rpl::producer<QString> status,
+		Fn<void()> clicked) {
 	const auto delegate = container->lifetime().make_state<
 		PeerListContentDelegateSimple
 	>();
 	const auto controller = container->lifetime().make_state<
 		SingleRowController
-	>(peer, std::move(status));
-	controller->setStyleOverrides(&st::peerListSingleRow);
+	>(thread, std::move(status), std::move(clicked));
+	controller->setStyleOverrides(thread->asTopic()
+		? &st::chooseTopicList
+		: &st::peerListSingleRow);
 	const auto content = container->add(object_ptr<PeerListContent>(
 		container,
 		controller));
@@ -1235,7 +1275,7 @@ void AddPermanentLinkBlock(
 	} else {
 		rpl::duplicate(
 			fromList
-		) | rpl::start_with_next([=](const Api::InviteLink &link) {
+		) | rpl::on_next([=](const Api::InviteLink &link) {
 			*currentLinkFields = link;
 		}, container->lifetime());
 
@@ -1245,7 +1285,7 @@ void AddPermanentLinkBlock(
 			return LinkData{ link.link, link.usage };
 		});
 	}
-	const auto weak = Ui::MakeWeak(container);
+	const auto weak = base::make_weak(container);
 	const auto copyLink = crl::guard(weak, [=] {
 		if (const auto current = value->current(); !current.link.isEmpty()) {
 			CopyInviteLink(show, current.link);
@@ -1311,7 +1351,7 @@ void AddPermanentLinkBlock(
 		st::inviteLinkFieldPadding);
 
 	label->clicks(
-	) | rpl::start_with_next(copyLink, label->lifetime());
+	) | rpl::on_next(copyLink, label->lifetime());
 
 	AddCopyShareLinkButtons(container, copyLink, shareLink);
 
@@ -1348,9 +1388,10 @@ void AddPermanentLinkBlock(
 			data.link,
 			data.usage);
 	}) | rpl::flatten_latest(
-	) | rpl::start_with_next([=](const Api::JoinedByLinkSlice &slice) {
+	) | rpl::on_next([=](const Api::JoinedByLinkSlice &slice) {
 		auto list = std::vector<HistoryView::UserpicInRow>();
-		list.reserve(slice.users.size());
+		const auto take = std::min(int(slice.users.size()), kMaxShownJoined);
+		list.reserve(take);
 		for (const auto &item : slice.users) {
 			const auto i = ranges::find(
 				state->list,
@@ -1361,6 +1402,9 @@ void AddPermanentLinkBlock(
 			} else {
 				list.push_back({ item.user });
 			}
+			if (list.size() == take) {
+				break;
+			}
 		}
 		state->count = slice.count;
 		state->list = std::move(list);
@@ -1370,7 +1414,7 @@ void AddPermanentLinkBlock(
 	peer->session().downloaderTaskFinished(
 	) | rpl::filter([=] {
 		return !state->allUserpicsLoaded;
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		auto pushing = false;
 		state->allUserpicsLoaded = true;
 		for (const auto &element : state->list) {
@@ -1426,7 +1470,7 @@ object_ptr<Ui::BoxContent> ShareInviteLinkBox(
 		const QString &link,
 		const QString &copied) {
 	const auto sending = std::make_shared<bool>();
-	const auto box = std::make_shared<QPointer<ShareBox>>();
+	const auto box = std::make_shared<base::weak_qptr<ShareBox>>();
 
 	const auto showToast = [=](const QString &text) {
 		if (*box) {
@@ -1440,8 +1484,12 @@ object_ptr<Ui::BoxContent> ShareInviteLinkBox(
 			? tr::lng_group_invite_copied(tr::now)
 			: copied);
 	};
+	auto countMessagesCallback = [=](const TextWithTags &comment) {
+		return 1;
+	};
 	auto submitCallback = [=](
 			std::vector<not_null<Data::Thread*>> &&result,
+			Fn<bool()> checkPaid,
 			TextWithTags &&comment,
 			Api::SendOptions options,
 			Data::ForwardOptions,
@@ -1450,28 +1498,17 @@ object_ptr<Ui::BoxContent> ShareInviteLinkBox(
 			return;
 		}
 
-		const auto error = [&] {
-			for (const auto thread : result) {
-				const auto error = GetErrorTextForSending(
-					thread,
-					{ .text = &comment });
-				if (!error.isEmpty()) {
-					return std::make_pair(error, thread);
-				}
-			}
-			return std::make_pair(QString(), result.front());
-		}();
-		if (!error.first.isEmpty()) {
-			auto text = TextWithEntities();
-			if (result.size() > 1) {
-				text.append(
-					Ui::Text::Bold(error.second->chatListName())
-				).append("\n\n");
-			}
-			text.append(error.first);
+		const auto errorWithThread = GetErrorForSending(
+			result,
+			{ .text = &comment });
+		if (errorWithThread.error) {
 			if (*box) {
-				(*box)->uiShow()->showBox(Ui::MakeInformBox(text));
+				(*box)->uiShow()->showBox(MakeSendErrorBox(
+					errorWithThread,
+					result.size() > 1));
 			}
+			return;
+		} else if (!checkPaid()) {
 			return;
 		}
 
@@ -1486,7 +1523,7 @@ object_ptr<Ui::BoxContent> ShareInviteLinkBox(
 			comment.text = link;
 		}
 		auto &api = session->api();
-		for (const auto thread : result) {
+		for (const auto &thread : result) {
 			auto message = Api::MessageToSend(
 				Api::SendAction(thread, options));
 			message.textWithTags = comment;
@@ -1500,7 +1537,7 @@ object_ptr<Ui::BoxContent> ShareInviteLinkBox(
 	};
 	auto filterCallback = [](not_null<Data::Thread*> thread) {
 		if (const auto user = thread->peer()->asUser()) {
-			if (user->canSendIgnoreRequirePremium()) {
+			if (user->canSendIgnoreMoneyRestrictions()) {
 				return true;
 			}
 		}
@@ -1509,11 +1546,12 @@ object_ptr<Ui::BoxContent> ShareInviteLinkBox(
 	auto object = Box<ShareBox>(ShareBox::Descriptor{
 		.session = session,
 		.copyCallback = std::move(copyCallback),
+		.countMessagesCallback = std::move(countMessagesCallback),
 		.submitCallback = std::move(submitCallback),
 		.filterCallback = std::move(filterCallback),
-		.premiumRequiredError = SharePremiumRequiredError(),
+		.moneyRestrictionError = ShareMessageMoneyRestrictionError(),
 	});
-	*box = Ui::MakeWeak(object.data());
+	*box = base::make_weak(object.data());
 	return object;
 }
 
@@ -1535,7 +1573,7 @@ object_ptr<Ui::BoxContent> EditLinkBox(
 	constexpr auto kPeriod = 3600 * 24 * 30;
 	constexpr auto kTestModePeriod = 300;
 	const auto creating = data.link.isEmpty();
-	const auto box = std::make_shared<QPointer<Ui::GenericBox>>();
+	const auto box = std::make_shared<base::weak_qptr<Ui::GenericBox>>();
 	using Fields = Ui::InviteLinkFields;
 	const auto done = [=](Fields result) {
 		const auto finish = [=](Api::InviteLink finished) {
@@ -1582,6 +1620,16 @@ object_ptr<Ui::BoxContent> EditLinkBox(
 	};
 	const auto isGroup = !peer->isBroadcast();
 	const auto isPublic = peer->isChannel() && peer->asChannel()->isPublic();
+	const auto globalRequestApproval = peer->isChannel()
+		&& peer->asChannel()->requestToJoin();
+	const auto guardBot = [&]() -> UserData* {
+		const auto channel = peer->asChannel();
+		return channel ? channel->guardBot() : nullptr;
+	}();
+	const auto guardBotUsername = guardBot ? guardBot->username() : QString();
+	const auto guardBotLink = guardBotUsername.isEmpty()
+		? QString()
+		: peer->session().createInternalLink(guardBotUsername);
 	auto object = Box([=](not_null<Ui::GenericBox*> box) {
 		const auto fill = isGroup
 			? Fn<Ui::InviteLinkSubscriptionToggle()>(nullptr)
@@ -1589,7 +1637,15 @@ object_ptr<Ui::BoxContent> EditLinkBox(
 				return Ui::FillCreateInviteLinkSubscriptionToggle(box, peer);
 			};
 		if (creating) {
-			Ui::CreateInviteLinkBox(box, fill, isGroup, isPublic, done);
+			Ui::CreateInviteLinkBox(
+				box,
+				fill,
+				isGroup,
+				isPublic,
+				globalRequestApproval,
+				guardBotUsername,
+				guardBotLink,
+				done);
 		} else {
 			Ui::EditInviteLinkBox(
 				box,
@@ -1603,11 +1659,14 @@ object_ptr<Ui::BoxContent> EditLinkBox(
 					.requestApproval = data.requestApproval,
 					.isGroup = isGroup,
 					.isPublic = isPublic,
+					.globalRequestApproval = globalRequestApproval,
+					.guardBotUsername = guardBotUsername,
+					.guardBotLink = guardBotLink,
 				},
 				done);
 		}
 	});
-	*box = Ui::MakeWeak(object.data());
+	*box = base::make_weak(object.data());
 	return object;
 }
 
@@ -1668,7 +1727,7 @@ object_ptr<Ui::BoxContent> ShowInviteLinkBox(
 		not_null<Ui::BoxContent*> box) {
 		rpl::duplicate(
 			data
-		) | rpl::start_with_next([=](const LinkData &link) {
+		) | rpl::on_next([=](const LinkData &link) {
 			if (ClosingLinkBox(link, revoked)) {
 				box->closeBox();
 				return;

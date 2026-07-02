@@ -4,14 +4,14 @@
 # For license and copyright information please follow this link:
 # https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
-if (APPLE)
-    # target_precompile_headers with COMPILE_LANGUAGE restriction.
-    cmake_minimum_required(VERSION 3.23)
-else()
-    cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.31)
+
+# Workaround some linking errors in GCC due to static library order.
+if (POLICY CMP0156)
+    cmake_policy(SET CMP0156 OLD)
 endif()
-if (POLICY CMP0149)
-    cmake_policy(SET CMP0149 NEW)
+if (POLICY CMP0179)
+    cmake_policy(SET CMP0179 OLD)
 endif()
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -20,19 +20,28 @@ include(cmake/validate_special_target.cmake)
 include(cmake/version.cmake)
 desktop_app_parse_version(Telegram/build/version)
 
-set(project_langs C CXX)
-if (APPLE)
-    list(APPEND project_langs OBJC OBJCXX)
-elseif (LINUX)
-    list(APPEND project_langs ASM)
+if (NOT DEFINED CMAKE_CONFIGURATION_TYPES)
+    set(configuration_types_init 1)
 endif()
 
 project(Telegram
-    LANGUAGES ${project_langs}
+    LANGUAGES C CXX
     VERSION ${desktop_app_version_cmake}
     DESCRIPTION "Official Telegram Desktop messenger"
     HOMEPAGE_URL "https://desktop.telegram.org"
 )
+
+if (APPLE)
+    enable_language(OBJC OBJCXX)
+    set(QT_NO_PRIVATE_MODULE_WARNING ON)
+endif()
+
+if (configuration_types_init
+    AND CMAKE_CONFIGURATION_TYPES
+    AND NOT MinSizeRel IN_LIST CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES};MinSizeRel" CACHE STRING "" FORCE)
+endif()
+
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Telegram)
 
 get_filename_component(third_party_loc "Telegram/ThirdParty" REALPATH)
@@ -47,9 +56,7 @@ include(cmake/variables.cmake)
 include(cmake/nice_target_sources.cmake)
 include(cmake/target_compile_options_if_exists.cmake)
 include(cmake/target_link_frameworks.cmake)
-include(cmake/target_link_optional_libraries.cmake)
 include(cmake/target_link_options_if_exists.cmake)
-include(cmake/target_link_static_libraries.cmake)
 include(cmake/init_target.cmake)
 include(cmake/generate_target.cmake)
 include(cmake/nuget.cmake)
@@ -60,6 +67,7 @@ include(cmake/options.cmake)
 include(cmake/external/qt/package.cmake)
 
 set(desktop_app_skip_libs
+    dispatch
     glibmm
     variant
 )

@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/storage_account.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "history/history_item_components.h"
 #include "history/history_item_helpers.h"
 #include "core/application.h"
 #include "core/mime_type.h"
@@ -61,12 +62,19 @@ constexpr auto ByDocument = [](const auto &entry) {
 	if (const auto user = peer->asUser()) {
 		return user->accessHash();
 	} else if (const auto channel = peer->asChannel()) {
-		return channel->access;
+		return channel->accessHash();
 	}
 	return 0;
 }
 
 [[nodiscard]] bool ItemContainsMedia(const DownloadObject &object) {
+	if (const auto iv = object.item->Get<HistoryMessageMediaForInstantView>()) {
+		if (object.document && iv->documents.contains(object.document)) {
+			return true;
+		} else if (object.photo && iv->photos.contains(object.photo)) {
+			return true;
+		}
+	}
 	if (const auto photo = object.photo) {
 		if (const auto media = object.item->media()) {
 			if (const auto page = media->webpage()) {
@@ -124,6 +132,15 @@ DownloadManager::DownloadManager()
 
 DownloadManager::~DownloadManager() = default;
 
+bool DownloadManager::empty() const {
+	for (const auto &[session, data] : _sessions) {
+		if (!data.downloading.empty() || !data.downloaded.empty()) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void DownloadManager::trackSession(not_null<Main::Session*> session) {
 	auto &data = _sessions.emplace(session, SessionData()).first->second;
 	data.downloaded = deserialize(session);
@@ -132,32 +149,32 @@ void DownloadManager::trackSession(not_null<Main::Session*> session) {
 	session->data().documentLoadProgress(
 	) | rpl::filter([=](not_null<DocumentData*> document) {
 		return _loadingDocuments.contains(document);
-	}) | rpl::start_with_next([=](not_null<DocumentData*> document) {
+	}) | rpl::on_next([=](not_null<DocumentData*> document) {
 		check(document);
 	}, data.lifetime);
 
 	session->data().itemLayoutChanged(
 	) | rpl::filter([=](not_null<const HistoryItem*> item) {
 		return _loading.contains(item);
-	}) | rpl::start_with_next([=](not_null<const HistoryItem*> item) {
+	}) | rpl::on_next([=](not_null<const HistoryItem*> item) {
 		check(item);
 	}, data.lifetime);
 
 	session->data().itemViewRefreshRequest(
-	) | rpl::start_with_next([=](not_null<const HistoryItem*> item) {
+	) | rpl::on_next([=](not_null<const HistoryItem*> item) {
 		changed(item);
 	}, data.lifetime);
 
 	session->changes().messageUpdates(
 		MessageUpdate::Flag::Destroyed
-	) | rpl::start_with_next([=](const MessageUpdate &update) {
+	) | rpl::on_next([=](const MessageUpdate &update) {
 		removed(update.item);
 	}, data.lifetime);
 
 	session->account().sessionChanges(
 	) | rpl::filter(
 		rpl::mappers::_1 != session
-	) | rpl::take(1) | rpl::start_with_next([=] {
+	) | rpl::take(1) | rpl::on_next([=] {
 		untrack(session);
 	}, data.lifetime);
 }
@@ -830,10 +847,7 @@ void DownloadManager::changed(not_null<const HistoryItem*> item) {
 		const auto i = ranges::find(data.downloaded, item.get(), ByItem);
 		Assert(i != end(data.downloaded));
 
-		const auto media = item->media();
-		const auto photo = media ? media->photo() : nullptr;
-		const auto document = media ? media->document() : nullptr;
-		if (i->object->photo != photo || i->object->document != document) {
+		if (!ItemContainsMedia(*i->object)) {
 			detach(*i);
 		}
 	}
@@ -1128,7 +1142,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 				state->document->session().downloaderTaskFinished(
 				) | rpl::filter([=] {
 					return self(self);
-				}) | rpl::start_with_next(
+				}) | rpl::on_next(
 					state->push,
 					state->downloadTaskLifetime);
 			}
@@ -1190,7 +1204,7 @@ rpl::producer<Ui::DownloadBarContent> MakeDownloadBarContent() {
 		manager.loadingListChanges(
 		) | rpl::filter([=] {
 			return !state->scheduled;
-		}) | rpl::start_with_next(state->push, lifetime);
+		}) | rpl::on_next(state->push, lifetime);
 
 		notify();
 		return lifetime;

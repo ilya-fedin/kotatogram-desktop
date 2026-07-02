@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "dialogs/ui/top_peers_strip.h"
 
+#include "kotato/kotato_settings.h"
 #include "base/event_filter.h"
 #include "lang/lang_keys.h"
 #include "ui/effects/ripple_animation.h"
@@ -60,15 +61,26 @@ TopPeersStrip::TopPeersStrip(
 	setupHeader();
 	setupStrip();
 
-	std::move(content) | rpl::start_with_next([=](const TopPeersList &list) {
+	std::move(content) | rpl::on_next([=](const TopPeersList &list) {
 		apply(list);
 	}, lifetime());
 
 	rpl::combine(
 		_count.value(),
 		_expanded.value()
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		resizeToWidth(width());
+	}, _strip.lifetime());
+
+	rpl::merge(
+		::Kotato::JsonSettings::Events("userpic_corner_radius"),
+		::Kotato::JsonSettings::Events("userpic_corner_radius_forum"),
+		::Kotato::JsonSettings::Events("userpic_corner_radius_forum_use_default")
+	) | rpl::on_next([=] {
+		for (auto &entry : _entries) {
+			entry.userpicFrameDirty = 1;
+		}
+		_strip.update();
 	}, _strip.lifetime());
 
 	resize(0, _header.height() + _strip.height());
@@ -88,7 +100,7 @@ void TopPeersStrip::setupHeader() {
 		widthValue()
 	) | rpl::map(
 		(rpl::mappers::_1 * single) > (rpl::mappers::_2 + (single * 2) / 3)
-	) | rpl::distinct_until_changed() | rpl::start_with_next([=](bool more) {
+	) | rpl::distinct_until_changed() | rpl::on_next([=](bool more) {
 		setExpanded(false);
 		if (!more) {
 			const auto toggle = _toggleExpanded.current();
@@ -113,7 +125,7 @@ void TopPeersStrip::setupHeader() {
 		rpl::combine(
 			_header.sizeValue(),
 			toggle->widthValue()
-		) | rpl::start_with_next([=](QSize size, int width) {
+		) | rpl::on_next([=](QSize size, int width) {
 			const auto x = st::searchedBarPosition.x();
 			const auto y = st::searchedBarPosition.y();
 			toggle->moveToRight(0, 0, size.width());
@@ -128,14 +140,14 @@ void TopPeersStrip::setupHeader() {
 		_toggleExpanded.value()
 	) | rpl::filter(
 		rpl::mappers::_2 == nullptr
-	) | rpl::start_with_next([=](QSize size, const auto) {
+	) | rpl::on_next([=](QSize size, const auto) {
 		const auto x = st::searchedBarPosition.x();
 		const auto y = st::searchedBarPosition.y();
 		label->resizeToWidth(size.width() - x * 2);
 		label->moveToLeft(x, y, size.width());
 	}, _header.lifetime());
 
-	_header.paintRequest() | rpl::start_with_next([=](QRect clip) {
+	_header.paintRequest() | rpl::on_next([=](QRect clip) {
 		QPainter(&_header).fillRect(clip, st::searchedBarBg);
 	}, _header.lifetime());
 }
@@ -181,7 +193,7 @@ void TopPeersStrip::setupStrip() {
 		return base::EventFilterResult::Cancel;
 	});
 
-	_strip.paintRequest() | rpl::start_with_next([=](QRect clip) {
+	_strip.paintRequest() | rpl::on_next([=](QRect clip) {
 		paintStrip(clip);
 	}, _strip.lifetime());
 }

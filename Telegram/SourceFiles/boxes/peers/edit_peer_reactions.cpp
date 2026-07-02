@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "apiwrap.h"
 #include "base/event_filter.h"
+#include "chat_helpers/emoji_list_widget.h"
 #include "chat_helpers/tabbed_panel.h"
 #include "chat_helpers/tabbed_selector.h"
 #include "core/ui_integration.h"
@@ -23,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "ui/boxes/boost_box.h"
 #include "ui/layers/generic_box.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
 #include "ui/vertical_list.h"
 #include "ui/widgets/checkbox.h"
@@ -158,6 +160,23 @@ bool MaybeDisabledEmoji::readyInDefaultState() {
 	return { Data::ReactionId{ like }, Data::ReactionId{ dislike } };
 }
 
+[[nodiscard]] std::vector<Data::ReactionId> CollectAvailableReactions(
+		not_null<Main::Session*> session) {
+	const auto &all = session->data().reactions().list(
+		Data::Reactions::Type::Active);
+	if (all.empty()) {
+		return DefaultSelected();
+	}
+	auto result = std::vector<Data::ReactionId>();
+	result.reserve(all.size());
+	for (const auto &reaction : all) {
+		if (!reaction.id.paid()) {
+			result.push_back(reaction.id);
+		}
+	}
+	return result;
+}
+
 [[nodiscard]] bool RemoveNonCustomEmojiFragment(
 		not_null<QTextDocument*> document,
 		UniqueCustomEmojiContext &context) {
@@ -234,7 +253,7 @@ void SetupOnlyCustomEmojiField(
 	const auto state = field->lifetime().make_state<State>();
 
 	field->changes(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		state->pending = true;
 		if (state->processing) {
 			return;
@@ -322,6 +341,7 @@ struct ReactionsSelectorArgs {
 	int customAllowed = 0;
 	int customHardLimit = 0;
 	bool all = false;
+	bool isGroup = false;
 };
 
 object_ptr<Ui::RpWidget> AddReactionsSelector(
@@ -362,26 +382,29 @@ object_ptr<Ui::RpWidget> AddReactionsSelector(
 	const auto customEmojiPaused = [controller = args.controller] {
 		return controller->isGifPausedAtLeastFor(PauseReason::Layer);
 	};
-	auto factory = [=](QStringView data, Fn<void()> update)
-		-> std::unique_ptr<Ui::Text::CustomEmoji> {
+	auto simpleContext = Core::TextContext({
+		.session = session,
+		.repaint = [=] { raw->update(); },
+	});
+	auto context = simpleContext;
+	context.customEmojiFactory = [=](
+		QStringView data,
+		const Ui::Text::MarkedContext &context
+	) -> std::unique_ptr<Ui::Text::CustomEmoji> {
 		const auto id = Data::ParseCustomEmojiData(data);
-		auto result = owner->customEmojiManager().create(
-			data,
-			std::move(update));
+		auto result = Ui::Text::MakeCustomEmoji(data, simpleContext);
 		if (state->unifiedFactoryOwner->lookupReactionId(id).custom()) {
-			return std::make_unique<MaybeDisabledEmoji>(
+			return MakeWrappedEmoji<MaybeDisabledEmoji>(
 				std::move(result),
 				[=] { return state->allowed.contains(id); });
 		}
 		using namespace Ui::Text;
-		return std::make_unique<FirstFrameEmoji>(std::move(result));
+		return MakeWrappedEmoji<FirstFrameEmoji>(std::move(result));
 	};
-	raw->setCustomTextContext([=](Fn<void()> repaint) {
-		return std::any(Core::MarkedTextContext{
-			.session = session,
-			.customEmojiRepaint = std::move(repaint),
-		});
-	}, customEmojiPaused, customEmojiPaused, std::move(factory));
+	raw->setCustomTextContext(
+		std::move(context),
+		customEmojiPaused,
+		customEmojiPaused);
 
 	const auto callback = args.callback;
 	const auto isCustom = [=](DocumentId id) {
@@ -416,7 +439,7 @@ object_ptr<Ui::RpWidget> AddReactionsSelector(
 	applyFromState();
 	std::move(
 		args.paid
-	) | rpl::start_with_next([=](bool paid) {
+	) | rpl::on_next([=](bool paid) {
 		const auto id = Data::ReactionId::Paid();
 		if (paid && !ranges::contains(state->reactions, id)) {
 			state->reactions.insert(begin(state->reactions), id);
@@ -436,14 +459,19 @@ object_ptr<Ui::RpWidget> AddReactionsSelector(
 	using SelectorState = ReactionsSelectorState;
 	std::move(
 		args.stateValue
-	) | rpl::start_with_next([=](SelectorState value) {
+	) | rpl::on_next([=, all = args.all](SelectorState value) {
 		switch (value) {
 		case SelectorState::Active:
 			state->overlay = nullptr;
 			state->focusLifetime.destroy();
 			if (raw->empty()) {
 				raw->setTextWithTags(
-					ComposeEmojiList(reactions, DefaultSelected()));
+					ComposeEmojiList(
+						reactions,
+						all
+							? CollectAvailableReactions(
+								&args.controller->session())
+							: DefaultSelected()));
 			}
 			raw->setDisabled(false);
 			raw->setFocusFast();
@@ -451,10 +479,10 @@ object_ptr<Ui::RpWidget> AddReactionsSelector(
 		case SelectorState::Disabled:
 			state->overlay = std::make_unique<Ui::RpWidget>(parent);
 			state->overlay->show();
-			raw->geometryValue() | rpl::start_with_next([=](QRect rect) {
+			raw->geometryValue() | rpl::on_next([=](QRect rect) {
 				state->overlay->setGeometry(rect);
 			}, state->overlay->lifetime());
-			state->overlay->paintRequest() | rpl::start_with_next([=](QRect clip) {
+			state->overlay->paintRequest() | rpl::on_next([=](QRect clip) {
 				auto color = st::boxBg->c;
 				color.setAlphaF(0.5);
 				QPainter(state->overlay.get()).fillRect(
@@ -468,7 +496,7 @@ object_ptr<Ui::RpWidget> AddReactionsSelector(
 			}
 			raw->setDisabled(true);
 			raw->focusedChanges(
-			) | rpl::start_with_next([=](bool focused) {
+			) | rpl::on_next([=](bool focused) {
 				if (focused) {
 					raw->parentWidget()->setFocus();
 				}
@@ -491,14 +519,15 @@ object_ptr<Ui::RpWidget> AddReactionsSelector(
 	panelList.erase(
 		ranges::remove(panelList, paid->selectAnimation->id),
 		end(panelList));
-	panel->selector()->provideRecentEmoji(panelList);
+	panel->selector()->provideRecentEmoji(
+		ChatHelpers::DocumentListToRecent(panelList));
 	panel->setDesiredHeightValues(
 		1.,
 		st::emojiPanMinHeight / 2,
 		st::emojiPanMinHeight);
 	panel->hide();
 	panel->selector()->customEmojiChosen(
-	) | rpl::start_with_next([=](ChatHelpers::FileChosen data) {
+	) | rpl::on_next([=](ChatHelpers::FileChosen data) {
 		Data::InsertCustomEmoji(raw, data.document);
 	}, panel->lifetime());
 
@@ -535,7 +564,7 @@ object_ptr<Ui::RpWidget> AddReactionsSelector(
 		panel->toggleAnimated();
 	});
 
-	raw->geometryValue() | rpl::start_with_next([=](QRect geometry) {
+	raw->geometryValue() | rpl::on_next([=](QRect geometry) {
 		toggle->move(
 			geometry.x() + geometry.width() - toggle->width(),
 			geometry.y() + geometry.height() - toggle->height());
@@ -567,9 +596,8 @@ void AddReactionsText(
 			inner,
 			tr::lng_manage_peer_reactions_own(
 				lt_link,
-				tr::lng_manage_peer_reactions_own_link(
-				) | Ui::Text::ToLink(),
-				Ui::Text::WithEntities),
+				tr::lng_manage_peer_reactions_own_link(tr::link),
+				tr::marked),
 			st::boxDividerLabel));
 	const auto weak = base::make_weak(navigation);
 	label->setClickHandlerFilter([=](const auto &...) {
@@ -590,11 +618,11 @@ void AddReactionsText(
 			count->value() | tr::to_count(),
 			lt_same_count,
 			std::move(countString),
-			Ui::Text::RichLangValue),
+			tr::rich),
 		tr::lng_manage_peer_reactions_boost(
 			lt_link,
-			tr::lng_manage_peer_reactions_boost_link() | Ui::Text::ToLink(),
-			Ui::Text::RichLangValue)
+			tr::lng_manage_peer_reactions_boost_link(tr::link),
+			tr::rich)
 	) | rpl::map([](TextWithEntities &&a, TextWithEntities &&b) {
 		a.append(' ').append(std::move(b));
 		return std::move(a);
@@ -664,7 +692,7 @@ void EditAllowedReactionsBox(
 	if (enabled) {
 		enabled->toggleOn(rpl::single(optionInitial != Option::None));
 		enabled->toggledValue(
-		) | rpl::start_with_next([=](bool value) {
+		) | rpl::on_next([=](bool value) {
 			state->selectorState = value
 				? SelectorState::Active
 				: SelectorState::Disabled;
@@ -732,9 +760,7 @@ void EditAllowedReactionsBox(
 
 	const auto all = args.list;
 	auto selected = (allowed.type != AllowedReactionsType::Some)
-		? (all
-			| ranges::views::transform(&Data::Reaction::id)
-			| ranges::to_vector)
+		? std::vector<Data::ReactionId>()
 		: allowed.some;
 	if (allowed.paidEnabled) {
 		selected.insert(begin(selected), Data::ReactionId::Paid());
@@ -754,7 +780,14 @@ void EditAllowedReactionsBox(
 				tr::lng_manage_peer_reactions_limit(tr::now));
 		}
 	};
-	changed(selected.empty() ? DefaultSelected() : std::move(selected), {});
+	changed(
+		!selected.empty()
+			? std::move(selected)
+			: !isGroup
+			? CollectAvailableReactions(
+				&args.navigation->parentController()->session())
+			: DefaultSelected(),
+		{});
 	Ui::AddSubsectionTitle(
 		reactions,
 		enabled
@@ -831,7 +864,7 @@ void EditAllowedReactionsBox(
 			left->sizeValue(),
 			center->sizeValue(),
 			right->sizeValue()
-		) | rpl::start_with_next([=](
+		) | rpl::on_next([=](
 				const QSize &s,
 				const QSize &leftSize,
 				const QSize &centerSize,
@@ -896,7 +929,7 @@ void EditAllowedReactionsBox(
 			st::manageGroupNoIconButton.button));
 		paid->toggleOn(state->paidEnabled.value());
 		paid->toggledValue(
-		) | rpl::start_with_next([=](bool value) {
+		) | rpl::on_next([=](bool value) {
 			state->paidEnabled = value;
 		}, paid->lifetime());
 		Ui::AddSkip(inner);
@@ -906,11 +939,11 @@ void EditAllowedReactionsBox(
 			tr::lng_manage_peer_reactions_paid_about(
 				lt_link,
 				tr::lng_manage_peer_reactions_paid_link([=](QString text) {
-					return Ui::Text::Link(
+					return tr::link(
 						text,
 						u"https://telegram.org/tos/stars"_q);
 				}),
-				Ui::Text::WithEntities));
+				tr::marked));
 	}
 	const auto collect = [=] {
 		auto result = AllowedReactions();
@@ -981,7 +1014,7 @@ void SaveAllowedReactions(
 		MTP_flags(Flag()
 			| (maxCount ? Flag::f_reactions_limit : Flag())
 			| (editPaidEnabled ? Flag::f_paid_enabled : Flag())),
-		peer->input,
+		peer->input(),
 		updated,
 		MTP_int(maxCount),
 		MTP_bool(paidEnabled)

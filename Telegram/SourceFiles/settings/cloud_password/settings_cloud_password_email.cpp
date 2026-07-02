@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/cloud_password/settings_cloud_password_common.h"
 #include "settings/cloud_password/settings_cloud_password_email_confirm.h"
 #include "settings/cloud_password/settings_cloud_password_manage.h"
+#include "settings/cloud_password/settings_cloud_password_step.h"
 #include "ui/vertical_list.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/widgets/buttons.h"
@@ -83,14 +84,13 @@ void Email::setupContent() {
 
 	Ui::AddSkip(content, st::settingLocalPasscodeDescriptionBottomSkip);
 
-	const auto wrap = AddWrappedField(
+	const auto newInput = AddWrappedField(
 		content,
 		tr::lng_cloud_password_email(),
 		currentStepDataEmail);
-	const auto newInput = wrap->entity();
 	const auto error = AddError(content, nullptr);
 	newInput->changes(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		error->hide();
 	}, newInput->lifetime());
 	AddSkipInsteadOfField(content);
@@ -108,7 +108,7 @@ void Email::setupContent() {
 				data.hint,
 				!data.email.isEmpty(),
 				data.email)
-		) | rpl::start_with_next_error_done([=](Api::CloudPassword::SetOk d) {
+		) | rpl::on_next_error_done([=](Api::CloudPassword::SetOk d) {
 			_requestLifetime.destroy();
 
 			auto data = stepData();
@@ -168,7 +168,7 @@ void Email::setupContent() {
 	};
 
 	const auto skip = AddLinkButton(
-		wrap,
+		newInput,
 		tr::lng_cloud_password_skip_email());
 	skip->setClickedCallback([=] {
 		confirm(QString());
@@ -189,7 +189,7 @@ void Email::setupContent() {
 	});
 
 	const auto submit = [=] { button->clicked({}, Qt::LeftButton); };
-	newInput->submits() | rpl::start_with_next(submit, newInput->lifetime());
+	newInput->submits() | rpl::on_next(submit, newInput->lifetime());
 
 	setFocusCallback([=] { newInput->setFocus(); });
 

@@ -43,6 +43,11 @@ struct FileReferenceAccumulator {
 		push(data.data().vphotos());
 		push(data.data().vdocuments());
 	}
+	void push(const MTPRichMessage &data) {
+		const auto &fields = data.data();
+		push(fields.vphotos());
+		push(fields.vdocuments());
+	}
 	void push(const MTPWallPaper &data) {
 		data.match([&](const MTPDwallPaper &data) {
 			push(data.vdocument());
@@ -59,6 +64,29 @@ struct FileReferenceAccumulator {
 			push(data.vdocuments());
 		}, [&](const MTPDwebPageAttributeStickerSet &data) {
 			push(data.vstickers());
+		}, [&](const MTPDwebPageAttributeUniqueStarGift &data) {
+			push(data.vgift());
+		}, [&](const MTPDwebPageAttributeStarGiftCollection &data) {
+			push(data.vicons());
+		}, [&](const MTPDwebPageAttributeStarGiftAuction &data) {
+			push(data.vgift());
+		}, [](const MTPDwebPageAttributeAiComposeTone &) {
+		});
+	}
+	void push(const MTPStarGift &data) {
+		data.match([&](const MTPDstarGift &data) {
+			push(data.vsticker());
+		}, [&](const MTPDstarGiftUnique &data) {
+			push(data.vattributes());
+		});
+	}
+	void push(const MTPStarGiftAttribute &data) {
+		data.match([&](const MTPDstarGiftAttributeModel &data) {
+			push(data.vdocument());
+		}, [&](const MTPDstarGiftAttributePattern &data) {
+			push(data.vdocument());
+		}, [&](const MTPDstarGiftAttributeBackdrop &data) {
+		}, [&](const MTPDstarGiftAttributeOriginalDetails &data) {
 		});
 	}
 	void push(const MTPWebPage &data) {
@@ -87,6 +115,8 @@ struct FileReferenceAccumulator {
 			push(data.vphoto());
 		}, [&](const MTPDmessageMediaDocument &data) {
 			push(data.vdocument());
+			push(data.vvideo_cover());
+			push(data.valt_documents());
 		}, [&](const MTPDmessageMediaWebPage &data) {
 			push(data.vwebpage());
 		}, [&](const MTPDmessageMediaGame &data) {
@@ -95,6 +125,15 @@ struct FileReferenceAccumulator {
 			push(data.vextended_media());
 		}, [&](const MTPDmessageMediaPaidMedia &data) {
 			push(data.vextended_media());
+		}, [&](const MTPDmessageMediaPoll &data) {
+			push(data.vattached_media());
+			for (const auto &answer : data.vpoll().data().vanswers().v) {
+				answer.match([&](const MTPDpollAnswer &a) {
+					push(a.vmedia());
+				}, [](const auto &) {
+				});
+			}
+			push(data.vresults().data().vsolution_media());
 		}, [](const auto &data) {
 		});
 	}
@@ -108,6 +147,7 @@ struct FileReferenceAccumulator {
 		data.match([&](const MTPDmessage &data) {
 			push(data.vmedia());
 			push(data.vreply_to());
+			push(data.vrich_message());
 		}, [&](const MTPDmessageService &data) {
 			data.vaction().match(
 			[&](const MTPDmessageActionChatEditPhoto &data) {
@@ -141,7 +181,20 @@ struct FileReferenceAccumulator {
 		});
 	}
 	void push(const MTPusers_UserFull &data) {
-		push(data.data().vfull_user().data().vpersonal_photo());
+		const auto &full = data.data().vfull_user().data();
+		push(full.vpersonal_photo());
+		push(full.vfallback_photo());
+		push(full.vprofile_photo());
+	}
+	void push(const MTPChatFull &data) {
+		data.match([&](const MTPDchatFull &data) {
+			push(data.vchat_photo());
+		}, [&](const MTPDchannelFull &data) {
+			push(data.vchat_photo());
+		});
+	}
+	void push(const MTPmessages_ChatFull &data) {
+		push(data.data().vfull_chat());
 	}
 	void push(const MTPmessages_RecentStickers &data) {
 		data.match([&](const MTPDmessages_recentStickers &data) {
@@ -182,6 +235,12 @@ struct FileReferenceAccumulator {
 	void push(const MTPstories_Stories &data) {
 		push(data.data().vstories());
 	}
+	void push(const MTPusers_SavedMusic &data) {
+		data.match([&](const MTPDusers_savedMusic &data) {
+			push(data.vdocuments());
+		}, [](const MTPDusers_savedMusicNotModified &data) {
+		});
+	}
 
 	UpdatedFileReferences result;
 };
@@ -204,6 +263,10 @@ UpdatedFileReferences GetFileReferences(const MTPphotos_Photos &data) {
 }
 
 UpdatedFileReferences GetFileReferences(const MTPusers_UserFull &data) {
+	return GetFileReferencesHelper(data);
+}
+
+UpdatedFileReferences GetFileReferences(const MTPmessages_ChatFull &data) {
 	return GetFileReferencesHelper(data);
 }
 
@@ -248,6 +311,10 @@ UpdatedFileReferences GetFileReferences(const MTPmessages_WebPage &data) {
 }
 
 UpdatedFileReferences GetFileReferences(const MTPstories_Stories &data) {
+	return GetFileReferencesHelper(data);
+}
+
+UpdatedFileReferences GetFileReferences(const MTPusers_SavedMusic &data) {
 	return GetFileReferencesHelper(data);
 }
 

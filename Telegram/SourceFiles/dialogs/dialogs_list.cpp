@@ -32,7 +32,7 @@ not_null<Row*> List::addToEnd(Key key) {
 		key,
 		std::make_unique<Row>(key, _rows.size(), height())
 	).first->second.get();
-	result->recountHeight(_narrowRatio);
+	result->recountHeight(_narrowRatio, _filterId);
 	_rows.emplace_back(result);
 	if (_sortMode == SortMode::Date) {
 		adjustByDate(result);
@@ -84,6 +84,16 @@ void List::adjustByName(not_null<Row*> row) {
 void List::adjustByDate(not_null<Row*> row) {
 	Expects(_sortMode == SortMode::Date);
 
+	if (_frozen) {
+		const auto canAdjustWhileFrozen = _pendingAdjust.empty()
+			&& (row->entry()->fixedOnTopIndex()
+				|| row->entry()->isPinnedDialog(_filterId));
+		if (!canAdjustWhileFrozen) {
+			_pendingAdjust.emplace(row);
+			return;
+		}
+	}
+
 	const auto key = row->sortKey(_filterId);
 	const auto index = row->index();
 	const auto i = _rows.begin() + index;
@@ -103,6 +113,53 @@ void List::adjustByDate(not_null<Row*> row) {
 	}
 }
 
+void List::freeze() {
+	_frozen = true;
+}
+
+void List::unfreeze() {
+	_frozen = false;
+	auto pending = base::take(_pendingAdjust);
+	if (pending.empty()) {
+		return;
+	} else if (pending.size() == 1) {
+		adjustByDate(*pending.begin());
+		return;
+	}
+	for (const auto &row : pending) {
+		adjustByDate(row);
+	}
+	if (!sortedByDate()) {
+		sortByDate();
+	}
+}
+
+bool List::sortedByDate() const {
+	Expects(_sortMode == SortMode::Date);
+
+	for (auto i = 1, count = int(_rows.size()); i != count; ++i) {
+		if (_rows[i - 1]->sortKey(_filterId) < _rows[i]->sortKey(_filterId)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void List::sortByDate() {
+	Expects(_sortMode == SortMode::Date);
+
+	ranges::stable_sort(_rows, [&](Row *a, Row *b) {
+		return a->sortKey(_filterId) > b->sortKey(_filterId);
+	});
+	auto top = 0;
+	for (auto i = 0, count = int(_rows.size()); i != count; ++i) {
+		const auto row = _rows[i];
+		row->_index = i;
+		row->_top = top;
+		top += row->height();
+	}
+}
+
 bool List::updateHeight(Key key, float64 narrowRatio) {
 	const auto i = _rowByKey.find(key);
 	if (i == _rowByKey.cend()) {
@@ -112,7 +169,7 @@ bool List::updateHeight(Key key, float64 narrowRatio) {
 	const auto index = row->index();
 	auto top = row->top();
 	const auto was = row->height();
-	row->recountHeight(narrowRatio);
+	row->recountHeight(narrowRatio, _filterId);
 	if (row->height() == was) {
 		return false;
 	}
@@ -129,7 +186,7 @@ bool List::updateHeights(float64 narrowRatio) {
 	auto top = 0;
 	for (const auto &row : _rows) {
 		row->_top = top;
-		row->recountHeight(narrowRatio);
+		row->recountHeight(narrowRatio, _filterId);
 		top += row->height();
 	}
 	return (height() != was);
@@ -170,6 +227,7 @@ bool List::remove(Key key, Row *replacedBy) {
 	}
 
 	const auto row = i->second.get();
+	_pendingAdjust.remove(row);
 	row->entry()->owner().dialogsRowReplaced({ row, replacedBy });
 
 	auto top = row->top();
@@ -198,7 +256,7 @@ Row *List::rowAtY(int y) const {
 
 List::iterator List::findByY(int y) const {
 	return ranges::lower_bound(_rows, y, ranges::less(), [](const Row *row) {
-		return row->top() + row->height();
+		return row->top() + row->height() - 1;
 	});
 }
 

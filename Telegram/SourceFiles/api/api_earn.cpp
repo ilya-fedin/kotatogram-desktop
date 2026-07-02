@@ -25,7 +25,7 @@ void RestrictSponsored(
 		bool restricted,
 		Fn<void(QString)> failed) {
 	channel->session().api().request(MTPchannels_RestrictSponsoredMessages(
-		channel->inputChannel,
+		channel->inputChannel(),
 		MTP_bool(restricted))
 	).done([=](const MTPUpdates &updates) {
 		channel->session().api().applyUpdates(updates);
@@ -40,46 +40,49 @@ void HandleWithdrawalButton(
 		std::shared_ptr<Ui::Show> show) {
 	Expects(receiver.currencyReceiver
 		|| (receiver.creditsReceiver && receiver.creditsAmount));
+
 	struct State {
 		rpl::lifetime lifetime;
 		bool loading = false;
 	};
 
-	const auto channel = receiver.currencyReceiver;
-	const auto peer = receiver.creditsReceiver;
+	const auto currencyReceiver = receiver.currencyReceiver;
+	const auto creditsReceiver = receiver.creditsReceiver;
+	const auto isChannel = receiver.currencyReceiver
+		&& receiver.currencyReceiver->isChannel();
 
 	const auto state = button->lifetime().make_state<State>();
-	const auto session = (channel ? &channel->session() : &peer->session());
+	const auto session = (currencyReceiver
+		? &currencyReceiver->session()
+		: &creditsReceiver->session());
 
-	using ChannelOutUrl = MTPstats_BroadcastRevenueWithdrawalUrl;
 	using CreditsOutUrl = MTPpayments_StarsRevenueWithdrawalUrl;
 
 	session->api().cloudPassword().reload();
 	const auto processOut = [=] {
 		if (state->loading) {
 			return;
-		}
-		if (peer && !receiver.creditsAmount()) {
+		} else if (creditsReceiver && !receiver.creditsAmount()) {
 			return;
 		}
 		state->loading = true;
 		state->lifetime = session->api().cloudPassword().state(
 		) | rpl::take(
 			1
-		) | rpl::start_with_next([=](const Core::CloudPasswordState &pass) {
+		) | rpl::on_next([=](const Core::CloudPasswordState &pass) {
 			state->loading = false;
 
 			auto fields = PasscodeBox::CloudFields::From(pass);
-			fields.customTitle = channel
+			fields.customTitle = isChannel
 				? tr::lng_channel_earn_balance_password_title()
 				: tr::lng_bot_earn_balance_password_title();
-			fields.customDescription = channel
+			fields.customDescription = isChannel
 				? tr::lng_channel_earn_balance_password_description(tr::now)
 				: tr::lng_bot_earn_balance_password_description(tr::now);
 			fields.customSubmitButton = tr::lng_passcode_submit();
 			fields.customCheckCallback = crl::guard(button, [=](
 					const Core::CloudPasswordResult &result,
-					QPointer<PasscodeBox> box) {
+					base::weak_qptr<PasscodeBox> box) {
 				const auto done = [=](const QString &result) {
 					if (!result.isEmpty()) {
 						UrlClickHandler::Open(result);
@@ -89,21 +92,24 @@ void HandleWithdrawalButton(
 					}
 				};
 				const auto fail = [=](const MTP::Error &error) {
-					show->showToast(error.type());
+					const auto message = error.type();
+					if (box && !box->handleCustomCheckError(message)) {
+						show->showToast(message);
+					}
 				};
-				if (channel) {
-					session->api().request(
-						MTPstats_GetBroadcastRevenueWithdrawalUrl(
-							channel->inputChannel,
-							result.result
-					)).done([=](const ChannelOutUrl &r) {
-						done(qs(r.data().vurl()));
-					}).fail(fail).send();
-				} else if (peer) {
+				if (currencyReceiver || creditsReceiver) {
+					using F = MTPpayments_getStarsRevenueWithdrawalUrl::Flag;
 					session->api().request(
 						MTPpayments_GetStarsRevenueWithdrawalUrl(
-							peer->input,
-							MTP_long(receiver.creditsAmount()),
+							MTP_flags(currencyReceiver
+								? F::f_ton
+								: F::f_amount),
+							currencyReceiver
+								? currencyReceiver->input()
+								: creditsReceiver->input(),
+							MTP_long(creditsReceiver
+								? receiver.creditsAmount()
+								: 0),
 							result.result
 					)).done([=](const CreditsOutUrl &r) {
 						done(qs(r.data().vurl()));
@@ -131,17 +137,19 @@ void HandleWithdrawalButton(
 				processOut();
 			}
 		};
-		if (channel) {
-			session->api().request(
-				MTPstats_GetBroadcastRevenueWithdrawalUrl(
-					channel->inputChannel,
-					MTP_inputCheckPasswordEmpty()
-			)).fail(fail).send();
-		} else if (peer) {
+		if (currencyReceiver || creditsReceiver) {
+			using F = MTPpayments_getStarsRevenueWithdrawalUrl::Flag;
 			session->api().request(
 				MTPpayments_GetStarsRevenueWithdrawalUrl(
-					peer->input,
-					MTP_long(std::numeric_limits<int64_t>::max()),
+					MTP_flags(currencyReceiver
+						? F::f_ton
+						: F::f_amount),
+					currencyReceiver
+						? currencyReceiver->input()
+						: creditsReceiver->input(),
+					MTP_long(creditsReceiver
+						? receiver.creditsAmount()
+						: 0),
 					MTP_inputCheckPasswordEmpty()
 			)).fail(fail).send();
 		}

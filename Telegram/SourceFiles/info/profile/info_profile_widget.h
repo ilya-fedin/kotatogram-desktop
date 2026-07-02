@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #pragma once
 
 #include "info/info_content_widget.h"
+#include "ui/effects/animations.h"
 
 namespace Data {
 class ForumTopic;
@@ -35,13 +36,14 @@ public:
 		PeerId migratedPeerId,
 		Origin origin = { v::null });
 	explicit Memento(not_null<Data::ForumTopic*> topic);
+	explicit Memento(not_null<Data::SavedSublist*> sublist);
 
 	object_ptr<ContentWidget> createWidget(
 		QWidget *parent,
 		not_null<Controller*> controller,
 		const QRect &geometry) override;
 
-	Section section() const override;
+	Info::Section section() const override;
 
 	[[nodiscard]] Origin origin() const {
 		return _origin;
@@ -56,6 +58,7 @@ private:
 	Memento(
 		not_null<PeerData*> peer,
 		Data::ForumTopic *topic,
+		Data::SavedSublist *sublist,
 		PeerId migratedPeerId,
 		Origin origin);
 
@@ -76,6 +79,8 @@ public:
 		not_null<Memento*> memento);
 
 	void setInnerFocus() override;
+	void enableBackButton() override;
+	void showFinished() override;
 
 	rpl::producer<QString> title() override;
 	rpl::producer<Dialogs::Stories::Content> titleStories() override;
@@ -86,7 +91,11 @@ private:
 
 	std::shared_ptr<ContentMemento> doCreateMemento() override;
 
+	FlexibleScrollData _flexibleScroll;
 	InnerWidget *_inner = nullptr;
+	base::weak_qptr<Ui::RpWidget> _pinnedToTop;
+	base::weak_qptr<Ui::RpWidget> _pinnedToBottom;
+	std::unique_ptr<FlexibleScrollHelper> _flexibleScrollHelper;
 
 };
 

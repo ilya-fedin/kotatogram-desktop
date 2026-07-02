@@ -10,6 +10,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_common.h"
 #include "chat_helpers/compose/compose_features.h"
 #include "ui/rp_widget.h"
+#include "ui/controls/swipe_handler_data.h"
 #include "ui/effects/animations.h"
 #include "ui/effects/message_sending_animation_common.h"
 #include "ui/effects/panel_animation.h"
@@ -62,6 +63,7 @@ struct FileChosen {
 	not_null<DocumentData*> document;
 	Api::SendOptions options;
 	Ui::MessageSendingAnimationFrom messageSendingFrom;
+	std::shared_ptr<Data::EmojiStatusCollectible> collectible;
 	TextWithTags caption;
 };
 
@@ -98,6 +100,7 @@ struct TabbedSelectorDescriptor {
 	TabbedSelectorMode mode = TabbedSelectorMode::Full;
 	Fn<QColor()> customTextColor;
 	ComposeFeatures features;
+	uint64 excludeStickerSetId = 0;
 };
 
 enum class TabbedSearchType {
@@ -154,7 +157,7 @@ public:
 	void refreshStickers();
 	void setCurrentPeer(PeerData *peer);
 	void provideRecentEmoji(
-		const std::vector<DocumentId> &customRecentList);
+		const std::vector<EmojiStatusId> &customRecentList);
 
 	void hideFinished();
 	void showStarted();
@@ -286,11 +289,16 @@ private:
 	not_null<GifsListWidget*> gifs() const;
 	not_null<StickersListWidget*> masks() const;
 
+	void reinstallSwipe(not_null<Ui::RpWidget*> widget);
+
 	const style::EmojiPan &_st;
 	const ComposeFeatures _features;
 	const std::shared_ptr<Show> _show;
 	const PauseReason _level = {};
 	const Fn<QColor()> _customTextColor;
+	const uint64 _excludeStickerSetId = 0;
+
+	Ui::Controls::SwipeBackResult _swipeBackData;
 
 	Mode _mode = Mode::Full;
 	int _roundRadius = 0;
@@ -309,6 +317,7 @@ private:
 	object_ptr<Ui::PlainShadow> _bottomShadow;
 	object_ptr<Ui::ScrollArea> _scroll;
 	object_ptr<Ui::FlatLabel> _restrictedLabel = { nullptr };
+	QString _restrictedLabelKey;
 	std::vector<Tab> _tabs;
 	SelectorTab _currentTabType = SelectorTab::Emoji;
 
@@ -326,6 +335,8 @@ private:
 
 	rpl::event_stream<> _showRequests;
 	rpl::event_stream<> _slideFinished;
+
+	rpl::lifetime _swipeLifetime;
 
 };
 
@@ -408,12 +419,14 @@ protected:
 	void scrollTo(int y);
 	void disableScroll(bool disabled);
 
-	void checkHideWithBox(object_ptr<Ui::BoxContent> box);
+	void showBoxPreventHide(object_ptr<Ui::BoxContent> box);
+	void preventHideWithBox(base::weak_qptr<Ui::BoxContent> weak);
 
 	void paintEmptySearchResults(
 		Painter &p,
 		const style::icon &icon,
-		const QString &text) const;
+		const QString &text,
+		bool skipIcon = false) const;
 
 private:
 	const style::EmojiPan &_st;

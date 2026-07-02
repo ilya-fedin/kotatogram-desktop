@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
 #include "history/view/media/history_view_sticker_player.h"
+#include "info/bot/starref/info_bot_starref_common.h"
 #include "info/userpic/info_userpic_emoji_builder_preview.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
@@ -25,10 +26,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/empty_userpic.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
+#include "ui/text/custom_emoji_instance.h"
+#include "ui/text/format_values.h"
+#include "ui/text/text_utilities.h"
 #include "ui/widgets/fields/number_input.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "styles/style_channel_earn.h"
+#include "styles/style_color_indices.h"
 #include "styles/style_credits.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_intro.h" // introFragmentIcon.
@@ -75,7 +80,7 @@ PaintRoundImageCallback MultiThumbnail(
 		q.setBrush(st::shadowFg);
 		q.drawRoundedRect(QRect(0, shift, smaller, smaller), radius, radius);
 		q.setPen(st::toastFg);
-		q.setFont(style::font(smaller / 2, style::FontFlag::Semibold, 0));
+		q.setFont(style::font(smaller / 2, style::FontFlag::Bold, 0));
 		q.drawText(
 			QRect(0, shift, smaller, smaller),
 			QString::number(totalCount),
@@ -152,7 +157,7 @@ not_null<RpWidget*> CreateSingleStarWidget(
 	const auto image = GenerateStars(height, 1);
 	widget->resize(image.size() / style::DevicePixelRatio());
 	widget->paintRequest(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		auto p = QPainter(widget);
 		p.drawImage(0, 0, image);
 	}, widget->lifetime());
@@ -162,29 +167,33 @@ not_null<RpWidget*> CreateSingleStarWidget(
 
 not_null<MaskedInputField*> AddInputFieldForCredits(
 		not_null<VerticalLayout*> container,
-		rpl::producer<uint64> value) {
+		rpl::producer<CreditsAmount> value) {
 	const auto &st = st::botEarnInputField;
 	const auto inputContainer = container->add(
 		CreateSkipWidget(container, st.heightMin));
-	const auto currentValue = rpl::variable<uint64>(
+	const auto currentValue = rpl::variable<CreditsAmount>(
 		rpl::duplicate(value));
 	const auto input = CreateChild<NumberInput>(
 		inputContainer,
 		st,
-		tr::lng_bot_earn_out_ph(),
-		QString::number(currentValue.current()),
-		currentValue.current());
+		tr::lng_bot_earn_out_ph_max(
+			lt_amount,
+			currentValue.value() | rpl::map([](CreditsAmount amount) {
+				return QString::number(amount.whole());
+			})),
+		QString::number(currentValue.current().whole()),
+		currentValue.current().whole());
 	rpl::duplicate(
 		value
-	) | rpl::start_with_next([=](uint64 v) {
-		input->changeLimit(v);
-		input->setText(QString::number(v));
+	) | rpl::on_next([=](CreditsAmount v) {
+		input->changeLimit(v.whole());
+		input->setText(QString::number(v.whole()));
 	}, input->lifetime());
 	const auto icon = CreateSingleStarWidget(
 		inputContainer,
 		st.style.font->height);
 	inputContainer->sizeValue(
-	) | rpl::start_with_next([=](const QSize &size) {
+	) | rpl::on_next([=](const QSize &size) {
 		input->resize(
 			size.width() - rect::m::sum::h(st::boxRowPadding),
 			st.heightMin);
@@ -215,9 +224,17 @@ PaintRoundImageCallback GenerateCreditsPaintUserpicCallback(
 		};
 	}
 	const auto bg = [&]() -> EmptyUserpic::BgColors {
+		if (entry.postsSearch) {
+			return {
+				st::historyPeerSavedMessagesBg,
+				st::historyPeerSavedMessagesBg2,
+			};
+		}
 		switch (entry.peerType) {
+		case Data::CreditsHistoryEntry::PeerType::API:
+			return { st::historyPeer2UserpicBg, st::historyPeer2UserpicBg2 };
 		case Data::CreditsHistoryEntry::PeerType::Peer:
-			return EmptyUserpic::UserpicColor(0);
+			return EmptyUserpic::UserpicColor(st::colorIndexRed);
 		case Data::CreditsHistoryEntry::PeerType::AppStore:
 			return { st::historyPeer7UserpicBg, st::historyPeer7UserpicBg2 };
 		case Data::CreditsHistoryEntry::PeerType::PlayMarket:
@@ -237,10 +254,68 @@ PaintRoundImageCallback GenerateCreditsPaintUserpicCallback(
 		Unexpected("Unknown peer type.");
 	}();
 	const auto userpic = std::make_shared<EmptyUserpic>(bg, QString());
+	if (entry.peerType == PeerType::API) {
+		const auto svg = std::make_shared<QSvgRenderer>(Ui::Premium::Svg());
+		const auto image = std::make_shared<QImage>();
+		return [=](Painter &p, int x, int y, int outer, int size) mutable {
+			userpic->paintCircle(p, x, y, outer, size);
+			if (image->isNull()) {
+				*image = QImage(
+					Size(size) * style::DevicePixelRatio(),
+					QImage::Format_ARGB32_Premultiplied);
+				image->setDevicePixelRatio(style::DevicePixelRatio());
+				image->fill(Qt::transparent);
+				constexpr auto kSize = 126.;
+				constexpr auto kBubbleRatio = kSize / ((kSize - 70) / 2.);
+				const auto rect = QRectF(0, 0, size, size)
+					- Margins(size / kBubbleRatio);
+
+				auto q = QPainter(image.get());
+				const auto hq = PainterHighQualityEnabler(q);
+				q.setPen(Qt::NoPen);
+				q.setBrush(st::historyPeerUserpicFg);
+				q.drawEllipse(rect);
+				constexpr auto kTailX1 = 4;
+				constexpr auto kTailY1 = 8;
+				constexpr auto kTailX2 = 2;
+				constexpr auto kTailY2 = 0;
+				constexpr auto kTailX3 = 9;
+				constexpr auto kTailY3 = 4;
+				auto path = QPainterPath();
+				path.moveTo(
+					st::lineWidth * kTailX1,
+					rect.height() - st::lineWidth * kTailY1);
+				path.lineTo(
+					st::lineWidth * kTailX2,
+					rect.height() - st::lineWidth * kTailY2);
+				path.lineTo(
+					st::lineWidth * kTailX3,
+					rect.height() - st::lineWidth * kTailY3);
+				path.translate(rect.x(), rect.y());
+				q.strokePath(
+					path,
+					QPen(
+						st::historyPeerUserpicFg,
+						st::lineWidth * 2,
+						Qt::SolidLine,
+						Qt::RoundCap,
+						Qt::RoundJoin));
+				q.fillPath(path, st::historyPeerUserpicFg);
+				q.setCompositionMode(QPainter::CompositionMode_Clear);
+				constexpr auto kStarRatio = kSize / ((kSize - 44) / 2.);
+				svg->render(
+					&q,
+					QRectF(0, 0, size, size) - Margins(size / kStarRatio));
+			}
+			p.drawImage(x, y, *image);
+		};
+	}
 	return [=](Painter &p, int x, int y, int outerWidth, int size) mutable {
 		userpic->paintCircle(p, x, y, outerWidth, size);
 		const auto rect = QRect(x, y, size, size);
-		((entry.peerType == PeerType::AppStore)
+		(entry.postsSearch
+			? st::creditsHistorySearchPostsIcon
+			: (entry.peerType == PeerType::AppStore)
 			? st::sessionIconiPhone
 			: (entry.peerType == PeerType::PlayMarket)
 			? st::sessionIconAndroid
@@ -267,8 +342,8 @@ PaintRoundImageCallback GenerateCreditsPaintEntryCallback(
 	photo->load(Data::PhotoSize::Large, {});
 
 	rpl::single(rpl::empty_value()) | rpl::then(
-		photo->owner().session().downloaderTaskFinished()
-	) | rpl::start_with_next([=] {
+		photo->session().downloaderTaskFinished()
+	) | rpl::on_next([=] {
 		using Size = Data::PhotoSize;
 		if (const auto large = state->view->image(Size::Large)) {
 			state->imagePtr = large;
@@ -317,8 +392,8 @@ PaintRoundImageCallback GenerateCreditsPaintEntryCallback(
 	video->loadThumbnail({});
 
 	rpl::single(rpl::empty_value()) | rpl::then(
-		video->owner().session().downloaderTaskFinished()
-	) | rpl::start_with_next([=] {
+		video->session().downloaderTaskFinished()
+	) | rpl::on_next([=] {
 		if (const auto thumbnail = state->view->thumbnail()) {
 			state->imagePtr = thumbnail;
 		}
@@ -475,7 +550,7 @@ Fn<PaintRoundImageCallback(Fn<void()>)> PaintPreviewCallback(
 				extended,
 				std::move(update));
 		};
-	} else if (entry.photoId) {
+	} else if (entry.photoId && entry.subscriptionUntil.isNull()) {
 		const auto photo = session->data().photo(entry.photoId);
 		return [=](Fn<void()> update) {
 			return GenerateCreditsPaintEntryCallback(
@@ -487,13 +562,43 @@ Fn<PaintRoundImageCallback(Fn<void()>)> PaintPreviewCallback(
 }
 
 TextWithEntities GenerateEntryName(const Data::CreditsHistoryEntry &entry) {
-	return (entry.reaction
+	return (entry.starrefCommission && !entry.starrefAmount)
+		? tr::lng_credits_commission(
+			tr::now,
+			lt_amount,
+			TextWithEntities{
+				Info::BotStarRef::FormatCommission(entry.starrefCommission)
+			},
+			TextWithEntities::Simple)
+		: entry.isLiveStoryReaction()
+		? tr::lng_credits_paid_messages_fee_live_reaction(
+			tr::now,
+			TextWithEntities::Simple)
+		: entry.paidMessagesCount
+		? tr::lng_credits_paid_messages_fee(
+			tr::now,
+			lt_count,
+			entry.paidMessagesCount,
+			TextWithEntities::Simple)
+		: (entry.premiumMonthsForStars
+		? tr::lng_premium_summary_title
+		: entry.floodSkip
+		? tr::lng_credits_box_history_entry_api
+		: entry.reaction
 		? tr::lng_credits_box_history_entry_reaction_name
+		: entry.giftOffer
+		? tr::lng_credits_box_history_entry_gift_offer
+		: entry.giftResale
+		? (entry.in
+			? tr::lng_credits_box_history_entry_gift_sold
+			: tr::lng_credits_box_history_entry_gift_bought)
 		: entry.bareGiveawayMsgId
 		? tr::lng_credits_box_history_entry_giveaway_name
 		: entry.converted
 		? tr::lng_credits_box_history_entry_gift_converted
-		: entry.convertStars
+		: (entry.gift && !entry.in && entry.uniqueGift)
+		? tr::lng_credits_box_history_entry_gift_transfer
+		: (entry.starsConverted || (entry.gift && !entry.in))
 		? tr::lng_credits_box_history_entry_gift_sent
 		: entry.gift
 		? tr::lng_credits_box_history_entry_gift_name
@@ -595,6 +700,28 @@ QImage CreditsWhiteDoubledIcon(int size, float64 outlineRatio) {
 		drawSingle(p);
 	}
 	return result;
+}
+
+std::unique_ptr<Ui::Text::CustomEmoji> MakeCreditsIconEmoji(
+		int height,
+		int count) {
+	return std::make_unique<Ui::CustomEmoji::Internal>(
+		u"credits_icon:%1:%2"_q.arg(height).arg(count),
+		GenerateStars(height, count));
+}
+
+Ui::Text::MarkedContext MakeCreditsIconContext(int height, int count) {
+	auto customEmojiFactory = [=](
+		QStringView data,
+		const Ui::Text::MarkedContext &context
+	) -> std::unique_ptr<Ui::Text::CustomEmoji> {
+		return MakeCreditsIconEmoji(height, count);
+	};
+	return { .customEmojiFactory = std::move(customEmojiFactory) };
+}
+
+TextWithEntities MakeCreditsIconEntity() {
+	return Ui::Text::SingleCustomEmoji(Ui::kCreditsCurrency);
 }
 
 } // namespace Ui

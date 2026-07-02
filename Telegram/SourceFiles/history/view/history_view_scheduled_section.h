@@ -21,6 +21,10 @@ namespace ChatHelpers {
 class Show;
 } // namespace ChatHelpers
 
+namespace Data {
+struct SentFromScheduled;
+} // namespace Data
+
 namespace SendMenu {
 struct Details;
 } // namespace SendMenu
@@ -36,7 +40,9 @@ class ScrollArea;
 class PlainShadow;
 class FlatButton;
 struct PreparedList;
+struct PreparedBundle;
 class SendFilesWay;
+class ImportantTooltip;
 } // namespace Ui
 
 namespace Profile {
@@ -46,6 +52,14 @@ class BackButton;
 namespace InlineBots {
 class Result;
 } // namespace InlineBots
+
+namespace HistoryView::Controls {
+struct VoiceToSend;
+} // namespace HistoryView::Controls
+
+namespace Window {
+class SessionController;
+} // namespace Window
 
 namespace HistoryView {
 
@@ -125,7 +139,8 @@ public:
 	void listMarkContentsRead(
 		const base::flat_set<not_null<HistoryItem*>> &items) override;
 	MessagesBarData listMessagesBar(
-		const std::vector<not_null<Element*>> &elements) override;
+		const std::vector<not_null<Element*>> &elements,
+		bool markLastAsRead) override;
 	void listContentRefreshed() override;
 	void listUpdateDateLink(
 		ClickHandlerPtr &link,
@@ -164,6 +179,8 @@ public:
 	History *listTranslateHistory() override;
 	void listAddTranslatedItems(
 		not_null<TranslateTracker*> tracker) override;
+	Ui::ScrollArea *listScrollArea() const override;
+	bool listThanosEffectEnabled() const override;
 
 	// CornerButtonsDelegate delegate.
 	void cornerButtonsShowAtPosition(
@@ -195,6 +212,12 @@ private:
 		Data::MessagePosition position,
 		FullMsgId originId = {});
 
+	void initProcessingVideoView(not_null<Element*> view);
+	void checkProcessingVideoTooltip(int visibleTop, int visibleBottom);
+	void showProcessingVideoTooltip();
+	void updateProcessingVideoTooltipPosition();
+	void clearProcessingVideoTracking(bool fast);
+
 	void setupComposeControls();
 
 	void setupDragArea();
@@ -209,14 +232,9 @@ private:
 		Api::SendOptions options) const;
 	void send();
 	void send(Api::SendOptions options);
+	void sendVoice(const Controls::VoiceToSend &data);
 	void sendVoice(
-		QByteArray bytes,
-		VoiceWaveform waveform,
-		crl::time duration);
-	void sendVoice(
-		QByteArray bytes,
-		VoiceWaveform waveform,
-		crl::time duration,
+		const Controls::VoiceToSend &data,
 		Api::SendOptions options);
 	void edit(
 		not_null<HistoryItem*> item,
@@ -225,7 +243,8 @@ private:
 		bool spoilered);
 	void highlightSingleNewMessage(const Data::MessagesSlice &slice);
 	void chooseAttach();
-	[[nodiscard]] SendMenu::Details sendMenuDetails() const;
+	[[nodiscard]] SendMenu::Details sendMenuDetails() const override;
+	bool processChosenSticker(ChatHelpers::FileChosen &&chosen) override;
 
 	void pushReplyReturn(not_null<HistoryItem*> item);
 	void checkReplyReturns();
@@ -244,15 +263,11 @@ private:
 		std::optional<bool> overrideSendImagesAsPhotos,
 		const QString &insertTextOnCancel = QString());
 	bool showSendingFilesError(const Ui::PreparedList &list) const;
-	bool showSendingFilesError(
-		const Ui::PreparedList &list,
-		std::optional<bool> compress) const;
+	bool showSendingFilesError(const Ui::PreparedBundle &bundle) const;
+
 	void sendingFilesConfirmed(
-		Ui::PreparedList &&list,
-		Ui::SendFilesWay way,
-		TextWithTags &&caption,
-		Api::SendOptions options,
-		bool ctrlShiftEnter);
+		std::shared_ptr<Ui::PreparedBundle> bundle,
+		Api::SendOptions options);
 
 	bool sendExistingDocument(
 		not_null<DocumentData*> document,
@@ -262,10 +277,10 @@ private:
 		not_null<PhotoData*> photo,
 		Api::SendOptions options);
 	void sendInlineResult(
-		not_null<InlineBots::Result*> result,
+		std::shared_ptr<InlineBots::Result> result,
 		not_null<UserData*> bot);
 	void sendInlineResult(
-		not_null<InlineBots::Result*> result,
+		std::shared_ptr<InlineBots::Result> result,
 		not_null<UserData*> bot,
 		Api::SendOptions options);
 
@@ -280,7 +295,16 @@ private:
 	std::unique_ptr<ComposeControls> _composeControls;
 	bool _skipScrollEvent = false;
 
+	Data::MessagePosition _processingVideoPosition;
+	base::weak_ptr<Element> _processingVideoView;
+	rpl::lifetime _processingVideoLifetime;
+
 	std::unique_ptr<HistoryView::StickerToast> _stickerToast;
+	std::unique_ptr<Ui::ImportantTooltip> _processingVideoTooltip;
+	base::Timer _processingVideoTipTimer;
+	bool _processingVideoUpdateScheduled = false;
+	bool _processingVideoTooltipShown = false;
+	bool _processingVideoCanShow = false;
 
 	CornerButtons _cornerButtons;
 
@@ -291,7 +315,9 @@ private:
 
 class ScheduledMemento final : public Window::SectionMemento {
 public:
-	ScheduledMemento(not_null<History*> history);
+	ScheduledMemento(
+		not_null<History*> history,
+		MsgId sentToScheduledId = 0);
 	ScheduledMemento(not_null<Data::ForumTopic*> forumTopic);
 
 	object_ptr<Window::SectionWidget> createWidget(
@@ -300,19 +326,29 @@ public:
 		Window::Column column,
 		const QRect &geometry) override;
 
-	not_null<History*> getHistory() const {
+	[[nodiscard]] not_null<History*> getHistory() const {
 		return _history;
 	}
 
-	not_null<ListMemento*> list() {
+	[[nodiscard]] not_null<ListMemento*> list() {
 		return &_list;
+	}
+
+	[[nodiscard]] MsgId sentToScheduledId() const {
+		return _sentToScheduledId;
 	}
 
 private:
 	const not_null<History*> _history;
 	const Data::ForumTopic *_forumTopic;
 	ListMemento _list;
+	MsgId _sentToScheduledId = 0;
 
 };
+
+bool ShowScheduledVideoPublished(
+	not_null<Window::SessionController*> controller,
+	const Data::SentFromScheduled &info,
+	Fn<void()> hidden = nullptr);
 
 } // namespace HistoryView

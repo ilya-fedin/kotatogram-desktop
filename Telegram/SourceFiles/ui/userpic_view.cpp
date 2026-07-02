@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "kotato/kotato_radius.h"
 #include "ui/empty_userpic.h"
+#include "ui/painter.h"
 #include "ui/image/image_prepare.h"
 
 namespace Ui {
@@ -26,16 +27,16 @@ void ValidateUserpicCache(
 		const QImage *cloud,
 		const EmptyUserpic *empty,
 		int size,
-		bool forum) {
+		PeerUserpicShape shape) {
 	Expects(cloud != nullptr || empty != nullptr);
 
-	const auto radius = Kotato::UserpicRadius(forum);
+	const auto radius = Kotato::UserpicRadius(shape == PeerUserpicShape::Forum);
 	const auto full = QSize(size, size);
 	const auto version = style::PaletteVersion();
-	const auto forumValue = forum ? 1 : 0;
+	const auto shapeValue = static_cast<uint32>(shape) & 3;
 	const auto regenerate = (view.cached.size() != QSize(size, size))
 		|| (view.radius != radius)
-		|| (view.forum != forumValue)
+		|| (view.shape != shapeValue)
 		|| (cloud && !view.empty.null())
 		|| (empty && empty != view.empty.get())
 		|| (empty && view.paletteVersion != version);
@@ -43,7 +44,7 @@ void ValidateUserpicCache(
 		return;
 	}
 	view.empty = empty;
-	view.forum = forumValue;
+	view.shape = shapeValue;
 	view.paletteVersion = version;
 
 	if (cloud) {
@@ -51,9 +52,11 @@ void ValidateUserpicCache(
 			full,
 			Qt::IgnoreAspectRatio,
 			Qt::SmoothTransformation);
-		if (radius >= 0.5) {
+		if (shape == PeerUserpicShape::Monoforum) {
+			view.cached = Ui::ApplyMonoforumShape(std::move(view.cached));
+		} else if (radius >= 0.5) {
 			view.cached = Images::Circle(std::move(view.cached));
-		} else if (radius) { 
+		} else if (radius) {
 			view.cached = Images::Round(
 				std::move(view.cached),
 				Images::CornersMask(size
@@ -67,9 +70,11 @@ void ValidateUserpicCache(
 		view.cached.fill(Qt::transparent);
 
 		auto p = QPainter(&view.cached);
-		if (radius >= 0.5) {
+		if (shape == PeerUserpicShape::Monoforum) {
+			empty->paintMonoforum(p, 0, 0, size, size);
+		} else if (radius >= 0.5) {
 			empty->paintCircle(p, 0, 0, size, size);
-		} else if (radius) { 
+		} else if (radius) {
 			empty->paintRounded(
 				p,
 				0,

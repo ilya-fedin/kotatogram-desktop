@@ -302,7 +302,13 @@ QString CountriesInstance::validPhoneCode(QString fullCode) const {
 	return QString();
 }
 
-QString CountriesInstance::countryNameByISO2(const QString &iso) const {
+QString CountriesInstance::countryNameByISO2(
+		const QString &iso,
+		Naming naming) const {
+	if (naming == Naming::Polls
+		&& !iso.compare(u"FT"_q, Qt::CaseInsensitive)) {
+		return u"Fragment"_q;
+	}
 	const auto &listByISO2 = byISO2();
 	const auto i = listByISO2.constFind(iso);
 	return (i != listByISO2.cend()) ? (*i)->name : QString();
@@ -322,6 +328,9 @@ QString CountriesInstance::flagEmojiByISO2(const QString &iso) const {
 		|| iso.back() < 'A'
 		|| iso.back() > 'Z') {
 		return QString();
+	} else if (iso == u"FT"_q) {
+		return QString::fromUtf8(
+			"\xF0\x9F\x8F\xB4\xE2\x80\x8D\xE2\x98\xA0\xEF\xB8\x8F");
 	}
 	auto result = QString(4, QChar(0xD83C));
 	result[1] = QChar(iso.front().unicode() - 'A' + 0xDDE6);

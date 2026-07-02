@@ -14,9 +14,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_settings.h"
 
 namespace Ui::NewBadge {
-namespace {
 
-[[nodiscard]] not_null<Ui::RpWidget*> CreateNewBadge(
+not_null<Ui::RpWidget*> CreateNewBadge(
 		not_null<Ui::RpWidget*> parent,
 		rpl::producer<QString> text) {
 	const auto badge = Ui::CreateChild<Ui::PaddingWrap<Ui::FlatLabel>>(
@@ -26,8 +25,9 @@ namespace {
 			std::move(text),
 			st::settingsPremiumNewBadge),
 		st::settingsPremiumNewBadgePadding);
+	badge->show();
 	badge->setAttribute(Qt::WA_TransparentForMouseEvents);
-	badge->paintRequest() | rpl::start_with_next([=] {
+	badge->paintRequest() | rpl::on_next([=] {
 		auto p = QPainter(badge);
 		auto hq = PainterHighQualityEnabler(p);
 		p.setPen(Qt::NoPen);
@@ -38,13 +38,11 @@ namespace {
 	return badge;
 }
 
-} // namespace
-
 void AddToRight(not_null<Ui::RpWidget*> parent) {
 	const auto badge = CreateNewBadge(parent, tr::lng_bot_side_menu_new());
 
 	parent->sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
+	) | rpl::on_next([=](QSize size) {
 		badge->moveToRight(
 			st::mainMenuButton.padding.right(),
 			(size.height() - badge->height()) / 2,
@@ -60,7 +58,7 @@ void AddAfterLabel(
 		tr::lng_premium_summary_new_badge());
 
 	label->geometryValue(
-	) | rpl::start_with_next([=](QRect geometry) {
+	) | rpl::on_next([=](QRect geometry) {
 		badge->move(st::settingsPremiumNewBadgePosition
 			+ QPoint(label->x() + label->width(), label->y()));
 	}, badge->lifetime());

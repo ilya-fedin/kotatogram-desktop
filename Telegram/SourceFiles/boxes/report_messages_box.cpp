@@ -27,13 +27,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace {
 
-[[nodiscard]] object_ptr<Ui::BoxContent> Report(
+[[nodiscard]] object_ptr<Ui::BoxContent> ReportPhoto(
 		not_null<PeerData*> peer,
-		std::variant<v::null_t, not_null<PhotoData*>> data,
+		not_null<PhotoData*> photo,
 		const style::ReportBox *stOverride) {
-	const auto source = v::match(data, [](const MessageIdsList &ids) {
-		return Ui::ReportSource::Message;
-	}, [&](not_null<PhotoData*> photo) {
+	const auto source = [&] {
 		return peer->isUser()
 			? (photo->hasVideo()
 				? Ui::ReportSource::ProfileVideo
@@ -45,19 +43,14 @@ namespace {
 			: (photo->hasVideo()
 				? Ui::ReportSource::ChannelVideo
 				: Ui::ReportSource::ChannelPhoto);
-	}, [&](StoryId id) {
-		return Ui::ReportSource::Story;
-	}, [](v::null_t) {
-		Unexpected("Bad source report.");
-		return Ui::ReportSource::Bot;
-	});
+	}();
 	const auto st = stOverride ? stOverride : &st::defaultReportBox;
 	return Box([=](not_null<Ui::GenericBox*> box) {
 		const auto show = box->uiShow();
 		Ui::ReportReasonBox(box, *st, source, [=](Ui::ReportReason reason) {
 			show->showBox(Box([=](not_null<Ui::GenericBox*> box) {
 				Ui::ReportDetailsBox(box, *st, [=](const QString &text) {
-					Api::SendReport(show, peer, reason, text, data);
+					Api::SendPhotoReport(show, peer, reason, text, photo);
 					show->hideLayer();
 				});
 			}));
@@ -70,7 +63,7 @@ namespace {
 object_ptr<Ui::BoxContent> ReportProfilePhotoBox(
 		not_null<PeerData*> peer,
 		not_null<PhotoData*> photo) {
-	return Report(peer, photo, nullptr);
+	return ReportPhoto(peer, photo, nullptr);
 }
 
 void ShowReportMessageBox(
@@ -86,7 +79,6 @@ void ShowReportMessageBox(
 	auto performRequest = [=](
 			const auto &repeatRequest,
 			Data::ReportInput reportInput) -> void {
-		constexpr auto kToastDuration = crl::time(4000);
 		report(reportInput, [=](const Api::ReportResult &result) {
 			if (!result.error.isEmpty()) {
 				if (result.error == u"MESSAGE_ID_REQUIRED"_q) {
@@ -113,11 +105,9 @@ void ShowReportMessageBox(
 			}
 			if (!result.options.empty() || result.commentOption) {
 				show->show(Box([=](not_null<Ui::GenericBox*> box) {
-					box->setTitle(
-						rpl::single(
-							result.title.isEmpty()
-								? reportInput.optionText
-								: result.title));
+					box->setTitle(result.title.isEmpty()
+						? reportInput.optionText
+						: result.title);
 
 					for (const auto &option : result.options) {
 						const auto button = Ui::AddReportOptionButton(
@@ -155,8 +145,7 @@ void ShowReportMessageBox(
 							auto label = object_ptr<Ui::FlatLabel>(
 								container,
 								tr::lng_report_details_message_about(),
-								st::boxDividerLabel);
-							label->setTextColorOverride(st->dividerFg->c);
+								st->divider.label);
 							using namespace Ui;
 							const auto widget = container->add(
 								object_ptr<PaddingWrap<>>(
@@ -167,11 +156,11 @@ void ShowReportMessageBox(
 								= CreateChild<BoxContentDivider>(
 									widget,
 									st::boxDividerHeight,
-									st->dividerBg,
+									st->divider.bar,
 									RectPart::Top | RectPart::Bottom);
 							background->lower();
 							widget->sizeValue(
-							) | rpl::start_with_next([=](const QSize &s) {
+							) | rpl::on_next([=](const QSize &s) {
 								background->resize(s);
 							}, background->lifetime());
 						}
@@ -192,7 +181,7 @@ void ShowReportMessageBox(
 							repeatRequest(repeatRequest, std::move(copy));
 						};
 						details->submits(
-						) | rpl::start_with_next(submit, details->lifetime());
+						) | rpl::on_next(submit, details->lifetime());
 						box->addButton(tr::lng_report_button(), submit);
 					} else {
 						box->addButton(
@@ -206,6 +195,7 @@ void ShowReportMessageBox(
 					}
 				}));
 			} else if (result.successful) {
+				constexpr auto kToastDuration = crl::time(4000);
 				show->showToast(
 					tr::lng_report_thanks(tr::now),
 					kToastDuration);

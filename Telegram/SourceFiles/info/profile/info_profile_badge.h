@@ -35,32 +35,24 @@ namespace Info::Profile {
 
 class EmojiStatusPanel;
 
-enum class BadgeType {
+enum class BadgeType : uchar {
 	None = 0x00,
 	Verified = 0x01,
-	Premium = 0x02,
-	Scam = 0x04,
-	Fake = 0x08,
+	BotVerified = 0x02,
+	Premium = 0x04,
+	Scam = 0x08,
+	Fake = 0x10,
+	Direct = 0x20,
 };
 inline constexpr bool is_flag_type(BadgeType) { return true; }
 
 class Badge final {
 public:
-	Badge(
-		not_null<QWidget*> parent,
-		const style::InfoPeerBadge &st,
-		not_null<PeerData*> peer,
-		EmojiStatusPanel *emojiStatusPanel,
-		Fn<bool()> animationPaused,
-		int customStatusLoopsLimit = 0,
-		base::flags<BadgeType> allowed
-			= base::flags<BadgeType>::from_raw(-1));
-
 	struct Content {
 		BadgeType badge = BadgeType::None;
-		DocumentId emojiStatusId = 0;
+		EmojiStatusId emojiStatusId;
 
-		friend inline constexpr bool operator==(Content, Content) = default;
+		friend inline bool operator==(Content, Content) = default;
 	};
 	Badge(
 		not_null<QWidget*> parent,
@@ -78,6 +70,7 @@ public:
 	[[nodiscard]] Ui::RpWidget *widget() const;
 
 	void setPremiumClickCallback(Fn<void()> callback);
+	void setOverrideStyle(const style::InfoPeerBadge *st);
 	[[nodiscard]] rpl::producer<> updated() const;
 	void move(int left, int top, int bottom);
 
@@ -85,9 +78,11 @@ public:
 
 private:
 	void setContent(Content content);
+	[[nodiscard]] const style::InfoPeerBadge &st() const;
 
 	const not_null<QWidget*> _parent;
 	const style::InfoPeerBadge &_st;
+	const style::InfoPeerBadge *_overrideSt = nullptr;
 	const not_null<Main::Session*> _session;
 	EmojiStatusPanel *_emojiStatusPanel = nullptr;
 	const int _customStatusLoopsLimit = 0;
@@ -101,5 +96,12 @@ private:
 	rpl::lifetime _lifetime;
 
 };
+
+[[nodiscard]] rpl::producer<Badge::Content> BadgeContentForPeer(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<Badge::Content> VerifiedContentForPeer(
+	not_null<PeerData*> peer);
+[[nodiscard]] rpl::producer<Badge::Content> BotVerifyBadgeForPeer(
+	not_null<PeerData*> peer);
 
 } // namespace Info::Profile

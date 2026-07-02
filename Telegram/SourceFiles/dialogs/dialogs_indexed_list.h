@@ -7,12 +7,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "dialogs/dialogs_entry.h"
 #include "dialogs/dialogs_list.h"
 
 class History;
 
 namespace Dialogs {
+
+struct RowsByLetter;
+class Row;
 
 class IndexedList {
 public:
@@ -22,6 +24,8 @@ public:
 	Row *addByName(Key key);
 	void adjustByDate(const RowsByLetter &links);
 	void moveToTop(Key key);
+	void freeze();
+	void unfreeze();
 	bool updateHeight(Key key, float64 narrowRatio);
 	bool updateHeights(float64 narrowRatio);
 

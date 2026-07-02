@@ -21,6 +21,11 @@ namespace Payments {
 struct CreditsFormData;
 } // namespace Payments
 
+namespace Settings {
+enum class SmallBalanceResult;
+struct SmallBalanceSource;
+} // namespace Settings
+
 namespace Ui {
 
 class RpWidget;
@@ -30,31 +35,32 @@ class FlatLabel;
 void SendCreditsBox(
 	not_null<Ui::GenericBox*> box,
 	std::shared_ptr<Payments::CreditsFormData> data,
-	Fn<void()> sent);
+	Fn<void(Settings::SmallBalanceResult)> sent);
 
-[[nodiscard]] TextWithEntities CreditsEmoji(
-	not_null<Main::Session*> session);
+[[nodiscard]] TextWithEntities CreditsEmoji();
 
-[[nodiscard]] TextWithEntities CreditsEmojiSmall(
-	not_null<Main::Session*> session);
+[[nodiscard]] TextWithEntities CreditsEmojiSmall();
 
 not_null<FlatLabel*> SetButtonMarkedLabel(
 	not_null<RpWidget*> button,
 	rpl::producer<TextWithEntities> text,
-	Fn<std::any(Fn<void()> update)> context,
+	Text::MarkedContext context,
 	const style::FlatLabel &st,
-	std::optional<QColor> textFg = {});
+	const style::color *textFg = nullptr);
 
 not_null<FlatLabel*> SetButtonMarkedLabel(
 	not_null<RpWidget*> button,
 	rpl::producer<TextWithEntities> text,
 	not_null<Main::Session*> session,
 	const style::FlatLabel &st,
-	std::optional<QColor> textFg = {});
+	const style::color *textFg = nullptr);
 
-void SendStarGift(
+void SendStarsForm(
 	not_null<Main::Session*> session,
 	std::shared_ptr<Payments::CreditsFormData> data,
 	Fn<void(std::optional<QString>)> done);
+
+[[nodiscard]] Settings::SmallBalanceSource SmallBalanceSourceFromForm(
+	std::shared_ptr<Payments::CreditsFormData> form);
 
 } // namespace Ui

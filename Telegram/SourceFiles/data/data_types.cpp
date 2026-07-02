@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_types.h"
 
+#include "media/media_common.h"
 #include "ui/widgets/fields/input_field.h"
 #include "storage/cache/storage_cache_types.h"
 #include "base/openssl_help.h"
@@ -114,8 +115,8 @@ void MessageCursor::applyTo(not_null<Ui::InputField*> field) {
 }
 
 PeerId PeerFromMessage(const MTPmessage &message) {
-	return message.match([](const MTPDmessageEmpty &) {
-		return PeerId(0);
+	return message.match([](const MTPDmessageEmpty &data) {
+		return data.vpeer_id() ? peerFromMTP(*data.vpeer_id()) : PeerId(0);
 	}, [](const auto &data) {
 		return peerFromMTP(data.vpeer_id());
 	});
@@ -157,8 +158,9 @@ BusinessShortcutId BusinessShortcutIdFromMessage(
 bool GoodStickerDimensions(int width, int height) {
 	// Show all .webp (except very large ones) as stickers,
 	// allow to open them in media viewer to see details.
-	constexpr auto kLargetsStickerSide = 2560;
-	return (width > 0)
-		&& (height > 0)
-		&& (width * height <= kLargetsStickerSide * kLargetsStickerSide);
+	constexpr auto kLargestStickerSide = 2560;
+	return ::Media::ValidFrameSize(
+		width,
+		height,
+		kLargestStickerSide * kLargestStickerSide);
 }

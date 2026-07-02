@@ -91,13 +91,13 @@ public:
 		_view->model()->setStringList(fontList);
 		resize(0, _view->sizeHintForRow(0) * 10);
 		_view->highlighted(
-		) | rpl::start_with_next([=](QString fontName) {
+		) | rpl::on_next([=](QString fontName) {
 			if (!field->hasFocus()) {
 				field->setText(fontName);
 			}
 		}, _view->lifetime());
 		field->changes(
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			if (field->getLastText().isEmpty()) {
 				_view->setCurrentItem(-1);
 				return;
@@ -214,13 +214,13 @@ void FontsBox::save() {
 	::Kotato::JsonSettings::SetAfterRestart("fonts/size", _fontSize);
 	::Kotato::JsonSettings::Write();
 
-	const auto box = std::make_shared<QPointer<BoxContent>>();
+	const auto box = std::make_shared<base::weak_qptr<BoxContent>>();
 
 	*box = getDelegate()->show(
 		Ui::MakeConfirmBox({
 			.text = tr::lng_settings_need_restart(),
 			.confirmed = [] { Core::Restart(); },
-			.cancelled = crl::guard(this, [=] { closeBox(); box->data()->closeBox(); }),
+			.cancelled = crl::guard(this, [=] { closeBox(); (*box)->closeBox(); }),
 			.confirmText = tr::lng_settings_restart_now(),
 			.cancelText = tr::lng_settings_restart_later(),
 		}));
@@ -232,13 +232,13 @@ void FontsBox::resetToDefault() {
 	::Kotato::JsonSettings::ResetAfterRestart("fonts/size");
 	::Kotato::JsonSettings::Write();
 
-	const auto box = std::make_shared<QPointer<BoxContent>>();
+	const auto box = std::make_shared<base::weak_qptr<BoxContent>>();
 
 	*box = getDelegate()->show(
 		Ui::MakeConfirmBox({
 			.text = tr::lng_settings_need_restart(),
 			.confirmed = [] { Core::Restart(); },
-			.cancelled = crl::guard(this, [=] { closeBox(); box->data()->closeBox(); }),
+			.cancelled = crl::guard(this, [=] { closeBox(); (*box)->closeBox(); }),
 			.confirmText = tr::lng_settings_restart_now(),
 			.cancelText = tr::lng_settings_restart_later(),
 		}));

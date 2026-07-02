@@ -34,7 +34,10 @@ struct BoostCounters {
 struct BoostFeatures {
 	base::flat_map<int, int> nameColorsByLevel;
 	base::flat_map<int, int> linkStylesByLevel;
+	base::flat_map<int, int> profileColorsByLevel;
 	int linkLogoLevel = 0;
+	int profileIconLevel = 0;
+	int autotranslateLevel = 0;
 	int transcribeLevel = 0;
 	int emojiPackLevel = 0;
 	int emojiStatusLevel = 0;
@@ -48,6 +51,7 @@ struct BoostBoxData {
 	QString name;
 	BoostCounters boost;
 	BoostFeatures features;
+	int lifting = 0;
 	bool allowMulti = false;
 	bool group = false;
 };
@@ -73,6 +77,10 @@ struct AskBoostChannelColor {
 	int requiredLevel = 0;
 };
 
+struct AskBoostAutotranslate {
+	int requiredLevel = 0;
+};
+
 struct AskBoostWallpaper {
 	int requiredLevel = 0;
 	bool group = false;
@@ -95,20 +103,28 @@ struct AskBoostCpm {
 	int requiredLevel = 0;
 };
 
+struct AskBoostWearCollectible {
+	int requiredLevel = 0;
+};
+
 struct AskBoostReason {
 	std::variant<
 		AskBoostChannelColor,
+		AskBoostAutotranslate,
 		AskBoostWallpaper,
 		AskBoostEmojiStatus,
 		AskBoostEmojiPack,
 		AskBoostCustomReactions,
-		AskBoostCpm> data;
+		AskBoostCpm,
+		AskBoostWearCollectible> data;
 };
 
 struct AskBoostBoxData {
 	QString link;
 	BoostCounters boost;
+	BoostFeatures features;
 	AskBoostReason reason;
+	bool group = false;
 };
 
 void AskBoostBox(

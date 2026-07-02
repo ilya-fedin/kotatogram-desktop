@@ -26,7 +26,7 @@ class CustomEmoji;
 
 namespace HistoryView {
 using PaintContext = Ui::ChatPaintContext;
-class Message;
+class Element;
 struct TextState;
 struct UserpicInRow;
 } // namespace HistoryView
@@ -42,6 +42,7 @@ struct InlineListData {
 		OutLayout = 0x02,
 		Flipped   = 0x04,
 		Tags      = 0x08,
+		Centered  = 0x10,
 	};
 	friend inline constexpr bool is_flag_type(Flag) { return true; };
 	using Flags = base::flags<Flag>;
@@ -83,6 +84,10 @@ public:
 	[[nodiscard]] bool getState(
 		QPoint point,
 		not_null<TextState*> outResult) const;
+	void clickHandlerPressedChanged(
+		const ClickHandlerPtr &handler,
+		bool pressed,
+		Fn<void()> repaint);
 
 	void animate(
 		Ui::ReactionFlyAnimationArgs &&args,
@@ -99,12 +104,17 @@ public:
 	[[nodiscard]] static QImage PrepareTagBg(QColor tagBg, QColor dotBg);
 
 private:
+	struct Dimension {
+		int left = 0;
+		int width = 0;
+	};
 	struct Userpics {
 		QImage image;
 		std::vector<UserpicInRow> list;
 		bool someNotLoaded = false;
 	};
 	struct Button;
+	struct RippleEffect;
 
 	void layout();
 	void layoutButtons();
@@ -131,6 +141,7 @@ private:
 	void validateTagBg(const QColor &color) const;
 
 	QSize countOptimalSize() override;
+	[[nodiscard]] Dimension countDimension(int width) const;
 
 	const not_null<::Data::Reactions*> _owner;
 	const Fn<ClickHandlerPtr(ReactionId)> _handlerFactory;
@@ -143,10 +154,23 @@ private:
 	mutable QImage _customCache;
 	mutable int _customSkip = 0;
 	bool _hasCustomEmoji = false;
+	mutable std::unique_ptr<RippleEffect> _ripple;
+	mutable QPoint _lastPoint;
+	mutable ReactionId _lastPointButton;
 
 };
 
 [[nodiscard]] InlineListData InlineListDataFromMessage(
-	not_null<Message*> message);
+	not_null<Element*> view);
 
-} // namespace HistoryView
+[[nodiscard]] ReactionId ReactionIdOfLink(const ClickHandlerPtr &link);
+
+struct ReactionCount {
+	int count = 0;
+	bool shortened = false;
+};
+[[nodiscard]] ReactionCount ReactionCountOfLink(
+	HistoryItem *item,
+	const ClickHandlerPtr &link);
+
+} // namespace HistoryView::Reactions

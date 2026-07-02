@@ -27,9 +27,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/wrap/fade_wrap.h"
 #include "ui/painter.h"
+#include "ui/rect.h"
 #include "passport/passport_encryption.h"
 #include "passport/passport_panel_edit_contact.h"
-#include "settings/settings_privacy_security.h"
+#include "settings/sections/settings_privacy_security.h"
 #include "styles/style_layers.h"
 #include "styles/style_passport.h"
 #include "styles/style_boxes.h"
@@ -47,9 +48,9 @@ void SetCloudPassword(
 		not_null<Ui::GenericBox*> box,
 		not_null<Main::Session*> session) {
 	session->api().cloudPassword().state(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		using namespace Settings;
-		const auto weak = Ui::MakeWeak(box);
+		const auto weak = base::make_weak(box);
 		if (CheckEditCloudPassword(session)) {
 			box->getDelegate()->show(
 				EditCloudPasswordBox(session));
@@ -73,17 +74,17 @@ void TransferPasswordError(
 	auto text = std::move(about).append('\n').append('\n').append(
 		tr::lng_rights_transfer_check_password(
 			tr::now,
-			Ui::Text::RichLangValue)
+			tr::rich)
 	).append('\n').append('\n').append(
 		tr::lng_rights_transfer_check_session(
 			tr::now,
-			Ui::Text::RichLangValue)
+			tr::rich)
 	);
 	if (error == PasswordErrorType::Later) {
 		text.append('\n').append('\n').append(
 			tr::lng_rights_transfer_check_later(
 				tr::now,
-				Ui::Text::RichLangValue));
+				tr::rich));
 	}
 	box->addRow(object_ptr<Ui::FlatLabel>(
 		box,
@@ -103,11 +104,11 @@ void StartPendingReset(
 		not_null<Main::Session*> session,
 		not_null<Ui::BoxContent*> context,
 		Fn<void()> close) {
-	const auto weak = Ui::MakeWeak(context.get());
+	const auto weak = base::make_weak(context.get());
 	auto lifetime = std::make_shared<rpl::lifetime>();
 
 	auto finish = [=](const QString &message) mutable {
-		if (const auto strong = weak.data()) {
+		if (const auto strong = weak.get()) {
 			if (!message.isEmpty()) {
 				strong->getDelegate()->show(Ui::MakeInformBox(message));
 			}
@@ -120,7 +121,7 @@ void StartPendingReset(
 	};
 
 	session->api().cloudPassword().resetPassword(
-	) | rpl::start_with_next_error_done([=](
+	) | rpl::on_next_error_done([=](
 			Api::CloudPassword::ResetRetryDate retryDate) {
 		constexpr auto kMinute = 60;
 		constexpr auto kHour = 3600;
@@ -136,7 +137,7 @@ void StartPendingReset(
 			: hours
 			? tr::lng_hours(tr::now, lt_count, hours)
 			: tr::lng_minutes(tr::now, lt_count, minutes);
-		if (const auto strong = weak.data()) {
+		if (const auto strong = weak.get()) {
 			strong->getDelegate()->show(Ui::MakeInformBox(
 				tr::lng_cloud_password_reset_later(
 					tr::now,
@@ -172,8 +173,9 @@ PasscodeBox::PasscodeBox(
 	bool turningOff)
 : _session(session)
 , _api(&_session->mtp())
+, _textWidth(st::boxWidth - st::boxPadding.left() * 1.5)
 , _turningOff(turningOff)
-, _about(st::boxWidth - st::boxPadding.left() * 1.5)
+, _about(_textWidth)
 , _oldPasscode(this, st::defaultInputField, tr::lng_passcode_enter_old())
 , _newPasscode(
 	this,
@@ -194,10 +196,11 @@ PasscodeBox::PasscodeBox(
 	const CloudFields &fields)
 : _session(session)
 , _api(mtp)
+, _textWidth(st::boxWidth - st::boxPadding.left() * 1.5)
 , _turningOff(fields.turningOff)
 , _cloudPwd(true)
 , _cloudFields(fields)
-, _about(st::boxWidth - st::boxPadding.left() * 1.5)
+, _about(_textWidth)
 , _oldPasscode(this, st::defaultInputField, tr::lng_cloud_password_enter_old())
 , _newPasscode(
 	this,
@@ -275,7 +278,7 @@ void PasscodeBox::prepare() {
 			: _cloudPwd
 			? tr::lng_cloud_password_about(tr::now)
 			: ktr("ktg_passcode_about")));
-	_aboutHeight = _about.countHeight(st::boxWidth - st::boxPadding.left() * 1.5);
+	_aboutHeight = _about.countHeight(_textWidth);
 	const auto onlyCheck = onlyCheckCurrent();
 	if (onlyCheck) {
 		_oldPasscode->show();
@@ -307,11 +310,11 @@ void PasscodeBox::prepare() {
 	connect(_newPasscode, &Ui::MaskedInputField::changed, [=] { newChanged(); });
 	connect(_reenterPasscode, &Ui::MaskedInputField::changed, [=] { newChanged(); });
 	_passwordHint->changes(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		newChanged();
 	}, _passwordHint->lifetime());
 	_recoverEmail->changes(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		if (!_emailError.isEmpty()) {
 			_emailError = QString();
 			update();
@@ -323,9 +326,9 @@ void PasscodeBox::prepare() {
 	connect(_newPasscode, &Ui::MaskedInputField::submitted, fieldSubmit);
 	connect(_reenterPasscode, &Ui::MaskedInputField::submitted, fieldSubmit);
 	_passwordHint->submits(
-	) | rpl::start_with_next(fieldSubmit, _passwordHint->lifetime());
+	) | rpl::on_next(fieldSubmit, _passwordHint->lifetime());
 	_recoverEmail->submits(
-	) | rpl::start_with_next(fieldSubmit, _recoverEmail->lifetime());
+	) | rpl::on_next(fieldSubmit, _recoverEmail->lifetime());
 
 	_recover->addClickHandler([=] { recoverByEmail(); });
 
@@ -383,28 +386,27 @@ void PasscodeBox::paintEvent(QPaintEvent *e) {
 
 	Painter p(this);
 
-	int32 w = st::boxWidth - st::boxPadding.left() * 1.5;
 	int32 abouty = (_passwordHint->isHidden() ? ((_reenterPasscode->isHidden() ? (_oldPasscode->y() + (_showRecoverLink && !_hintText.isEmpty() ? st::passcodeTextLine : 0)) : _reenterPasscode->y()) + st::passcodeSkip) : _passwordHint->y()) + _oldPasscode->height() + st::passcodeLittleSkip + st::passcodeAboutSkip;
 	p.setPen(st::boxTextFg);
-	_about.drawLeft(p, st::boxPadding.left(), abouty, w, width());
+	_about.drawLeft(p, st::boxPadding.left(), abouty, _textWidth, width());
 
 	if (!_hintText.isEmpty() && _oldError.isEmpty()) {
-		_hintText.drawLeftElided(p, st::boxPadding.left(), _oldPasscode->y() + _oldPasscode->height() + ((st::passcodeTextLine - st::normalFont->height) / 2), w, width(), 1, style::al_topleft);
+		_hintText.drawLeftElided(p, st::boxPadding.left(), _oldPasscode->y() + _oldPasscode->height() + ((st::passcodeTextLine - st::normalFont->height) / 2), _textWidth, width(), 1, style::al_topleft);
 	}
 
 	if (!_oldError.isEmpty()) {
 		p.setPen(st::boxTextFgError);
-		p.drawText(QRect(st::boxPadding.left(), _oldPasscode->y() + _oldPasscode->height(), w, st::passcodeTextLine), _oldError, style::al_left);
+		p.drawText(QRect(st::boxPadding.left(), _oldPasscode->y() + _oldPasscode->height(), _textWidth, st::passcodeTextLine), _oldError, style::al_left);
 	}
 
 	if (!_newError.isEmpty()) {
 		p.setPen(st::boxTextFgError);
-		p.drawText(QRect(st::boxPadding.left(), _reenterPasscode->y() + _reenterPasscode->height(), w, st::passcodeTextLine), _newError, style::al_left);
+		p.drawText(QRect(st::boxPadding.left(), _reenterPasscode->y() + _reenterPasscode->height(), _textWidth, st::passcodeTextLine), _newError, style::al_left);
 	}
 
 	if (!_emailError.isEmpty()) {
 		p.setPen(st::boxTextFgError);
-		p.drawText(QRect(st::boxPadding.left(), _recoverEmail->y() + _recoverEmail->height(), w, st::passcodeTextLine), _emailError, style::al_left);
+		p.drawText(QRect(st::boxPadding.left(), _recoverEmail->y() + _recoverEmail->height(), _textWidth, st::passcodeTextLine), _emailError, style::al_left);
 	}
 }
 
@@ -446,7 +448,7 @@ void PasscodeBox::recoverPasswordDone(
 		_replacedBy->closeBox();
 	}
 	_setRequest = 0;
-	const auto weak = Ui::MakeWeak(this);
+	const auto weak = base::make_weak(this);
 	_newAuthorization.fire_copy(result);
 	if (weak) {
 		_newPasswordSet.fire_copy(newPasswordBytes);
@@ -465,7 +467,7 @@ void PasscodeBox::setPasswordDone(const QByteArray &newPasswordBytes) {
 		_replacedBy->closeBox();
 	}
 	_setRequest = 0;
-	const auto weak = Ui::MakeWeak(this);
+	const auto weak = base::make_weak(this);
 	_newPasswordSet.fire_copy(newPasswordBytes);
 	if (weak) {
 		auto text = _reenterPasscode->isHidden()
@@ -566,9 +568,9 @@ void PasscodeBox::validateEmail(
 			} else if (error.type() == u"CODE_INVALID"_q) {
 				errors->fire(tr::lng_signin_wrong_code(tr::now));
 			} else if (error.type() == u"EMAIL_HASH_EXPIRED"_q) {
-				const auto weak = Ui::MakeWeak(this);
+				const auto weak = base::make_weak(this);
 				_clearUnconfirmedPassword.fire({});
-				if (const auto strong = weak.data()) {
+				if (const auto strong = weak.get()) {
 					strong->getDelegate()->show(
 						Ui::MakeInformBox(
 							Lang::Hard::EmailConfirmationExpired()),
@@ -606,7 +608,7 @@ void PasscodeBox::validateEmail(
 	box->boxClosing(
 	) | rpl::filter([=] {
 		return !*set;
-	}) | start_with_next([=, weak = Ui::MakeWeak(this)] {
+	}) | on_next([=, weak = base::make_weak(this)] {
 		if (weak) {
 			weak->_clearUnconfirmedPassword.fire({});
 		}
@@ -709,7 +711,7 @@ void PasscodeBox::save(bool force) {
 		}
 	} else {
 		closeReplacedBy();
-		const auto weak = Ui::MakeWeak(this);
+		const auto weak = base::make_weak(this);
 		cSetPasscodeBadTries(0);
 		_session->domain().local().setPasscode(pwd.toUtf8());
 		Core::App().localPasscodeChanged();
@@ -741,7 +743,7 @@ void PasscodeBox::submitOnlyCheckCloudPassword(const QString &oldPassword) {
 void PasscodeBox::sendOnlyCheckCloudPassword(const QString &oldPassword) {
 	checkPassword(oldPassword, [=](const Core::CloudPasswordResult &check) {
 		if (const auto onstack = _cloudFields.customCheckCallback) {
-			onstack(check, Ui::MakeWeak(this));
+			onstack(check, base::make_weak(this));
 		} else {
 			Assert(_cloudFields.turningOff);
 			sendClearCloudPassword(check);
@@ -1104,7 +1106,7 @@ void PasscodeBox::recover() {
 		return;
 	}
 
-	const auto weak = Ui::MakeWeak(this);
+	const auto weak = base::make_weak(this);
 	const auto box = getDelegate()->show(Box<RecoverBox>(
 		&_api.instance(),
 		_session,
@@ -1116,7 +1118,7 @@ void PasscodeBox::recover() {
 	) | rpl::start_to_stream(_newPasswordSet, lifetime());
 
 	box->recoveryExpired(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		recoverExpired();
 	}, lifetime());
 
@@ -1142,11 +1144,20 @@ RecoverBox::RecoverBox(
 	Fn<void()> closeParent)
 : _session(session)
 , _api(mtp)
-, _pattern(st::normalFont->elided(tr::lng_signin_recover_hint(tr::now, lt_recover_email, pattern), st::boxWidth - st::boxPadding.left() * 1.5))
+, _textWidth(st::boxWidth - st::boxPadding.left() * 1.5)
 , _cloudFields(fields)
 , _recoverCode(this, st::defaultInputField, tr::lng_signin_code())
 , _noEmailAccess(this, tr::lng_signin_try_password(tr::now))
+, _patternLabel(
+	this,
+	tr::lng_signin_recover_hint(
+		lt_recover_email,
+		rpl::single(Ui::Text::WrapEmailPattern(pattern)),
+		tr::marked),
+	st::termsContent,
+	st::defaultPopupMenu)
 , _closeParent(std::move(closeParent)) {
+	_patternLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
 	if (_cloudFields.pendingResetDate != 0 || !session) {
 		_noEmailAccess.destroy();
 	} else {
@@ -1177,26 +1188,31 @@ rpl::producer<> RecoverBox::recoveryExpired() const {
 	return _recoveryExpired.events();
 }
 
-void RecoverBox::prepare() {
-	setTitle(tr::lng_signin_recover_title());
-
-	addButton(tr::lng_passcode_submit(), [=] { submit(); });
-	addButton(tr::lng_cancel(), [=] { closeBox(); });
-
+void RecoverBox::updateHeight() {
 	setDimensions(
 		st::boxWidth,
 		(st::passcodePadding.top()
 			+ st::passcodePadding.bottom()
 			+ st::passcodeTextLine
 			+ _recoverCode->height()
+			+ _patternLabel->height()
 			+ st::passcodeTextLine));
+}
+
+void RecoverBox::prepare() {
+	setTitle(tr::lng_signin_recover_title());
+
+	addButton(tr::lng_passcode_submit(), [=] { submit(); });
+	addButton(tr::lng_cancel(), [=] { closeBox(); });
+
+	updateHeight();
 
 	_recoverCode->changes(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		codeChanged();
 	}, _recoverCode->lifetime());
 	_recoverCode->submits(
-	) | rpl::start_with_next([=] { submit(); }, _recoverCode->lifetime());
+	) | rpl::on_next([=] { submit(); }, _recoverCode->lifetime());
 }
 
 void RecoverBox::paintEvent(QPaintEvent *e) {
@@ -1206,23 +1222,42 @@ void RecoverBox::paintEvent(QPaintEvent *e) {
 
 	p.setFont(st::normalFont);
 	p.setPen(st::boxTextFg);
-	int32 w = st::boxWidth - st::boxPadding.left() * 1.5;
-	p.drawText(QRect(st::boxPadding.left(), _recoverCode->y() - st::passcodeTextLine - st::passcodePadding.top(), w, st::passcodePadding.top() + st::passcodeTextLine), _pattern, style::al_left);
 
 	if (!_error.isEmpty()) {
 		p.setPen(st::boxTextFgError);
-		p.drawText(QRect(st::boxPadding.left(), _recoverCode->y() + _recoverCode->height(), w, st::passcodeTextLine), _error, style::al_left);
+		p.drawText(
+			QRect(
+				st::boxPadding.left(),
+				_recoverCode->y() + _recoverCode->height(),
+				_textWidth,
+				st::passcodeTextLine),
+			_error,
+			style::al_left);
 	}
 }
 
 void RecoverBox::resizeEvent(QResizeEvent *e) {
 	BoxContent::resizeEvent(e);
 
-	_recoverCode->resize(st::boxWidth - st::boxPadding.left() - st::boxPadding.right(), _recoverCode->height());
-	_recoverCode->moveToLeft(st::boxPadding.left(), st::passcodePadding.top() + st::passcodePadding.bottom() + st::passcodeTextLine);
+	_patternLabel->resizeToWidth(_textWidth);
+	_patternLabel->moveToLeft(
+		st::boxPadding.left(),
+		st::passcodePadding.top());
+
+	_recoverCode->resize(
+		st::boxWidth - st::boxPadding.left() - st::boxPadding.right(),
+		_recoverCode->height());
+	_recoverCode->moveToLeft(
+		st::boxPadding.left(),
+		rect::m::sum::v(st::passcodePadding) + _patternLabel->height());
 	if (_noEmailAccess) {
-		_noEmailAccess->moveToLeft(st::boxPadding.left(), _recoverCode->y() + _recoverCode->height() + (st::passcodeTextLine - _noEmailAccess->height()) / 2);
+		_noEmailAccess->moveToLeft(
+			st::boxPadding.left(),
+			rect::bottom(_recoverCode)
+				+ (st::passcodeTextLine - _noEmailAccess->height()) / 2);
 	}
+
+	updateHeight();
 }
 
 void RecoverBox::setInnerFocus() {
@@ -1308,8 +1343,8 @@ void RecoverBox::proceedToChange(const QString &code) {
 	auto box = Box<PasscodeBox>(_session, fields);
 
 	box->boxClosing(
-	) | rpl::start_with_next([=] {
-		const auto weak = Ui::MakeWeak(this);
+	) | rpl::on_next([=] {
+		const auto weak = base::make_weak(this);
 		if (const auto onstack = _closeParent) {
 			onstack();
 		}
@@ -1319,7 +1354,7 @@ void RecoverBox::proceedToChange(const QString &code) {
 	}, lifetime());
 
 	box->newPasswordSet(
-	) | rpl::start_with_next([=](QByteArray &&password) {
+	) | rpl::on_next([=](QByteArray &&password) {
 		_newPasswordSet.fire(std::move(password));
 	}, lifetime());
 
@@ -1365,7 +1400,7 @@ RecoveryEmailValidation ConfirmRecoveryEmail(
 	const auto errors = std::make_shared<rpl::event_stream<QString>>();
 	const auto resent = std::make_shared<rpl::event_stream<QString>>();
 	const auto requestId = std::make_shared<mtpRequestId>(0);
-	const auto weak = std::make_shared<QPointer<Ui::BoxContent>>();
+	const auto weak = std::make_shared<base::weak_qptr<Ui::BoxContent>>();
 	const auto reloads = std::make_shared<rpl::event_stream<>>();
 	const auto cancels = std::make_shared<rpl::event_stream<>>();
 

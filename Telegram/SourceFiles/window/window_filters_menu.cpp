@@ -14,28 +14,29 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_main_menu.h"
 #include "window/window_peer_menu.h"
-#include "main/main_session.h"
 #include "main/main_account.h"
-#include "core/application.h"
-#include "core/core_settings.h"
-#include "window/notifications_manager.h"
+#include "main/main_session.h"
+#include "core/ui_integration.h"
 #include "data/data_session.h"
 #include "data/data_chat_filters.h"
-#include "data/data_folder.h"
 #include "data/data_user.h"
 #include "data/data_peer_values.h"
 #include "data/data_premium_limits.h"
+#include "data/data_unread_value.h"
 #include "lang/lang_keys.h"
 #include "ui/filter_icons.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/vertical_layout_reorder.h"
+#include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/toast/toast.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/power_saving.h"
 #include "ui/ui_utility.h"
 #include "boxes/filters/edit_filter_box.h"
+#include "boxes/choose_filter_box.h"
 #include "boxes/premium_limits_box.h"
-#include "settings/settings_folders.h"
+#include "settings/sections/settings_folders.h"
 #include "storage/storage_media_prepare.h"
 #include "api/api_chat_filters.h"
 #include "apiwrap.h"
@@ -46,39 +47,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Window {
 namespace {
-
-[[nodiscard]] Dialogs::UnreadState MainListMapUnreadState(
-		not_null<Main::Session*> session,
-		const Dialogs::UnreadState &state) {
-	const auto folderId = Data::Folder::kId;
-	if (const auto folder = session->data().folderLoaded(folderId)) {
-		return state - folder->chatsList()->unreadState();
-	}
-	return state;
-}
-
-[[nodiscard]] rpl::producer<Dialogs::UnreadState> MainListUnreadState(
-		not_null<Dialogs::MainList*> list) {
-	return rpl::single(rpl::empty) | rpl::then(
-		list->unreadStateChanges() | rpl::to_empty
-	) | rpl::map([=] {
-		return list->unreadState();
-	});
-}
-
-[[nodiscard]] rpl::producer<Dialogs::UnreadState> UnreadStateValue(
-		not_null<Main::Session*> session,
-		FilterId filterId) {
-	if (filterId > 0) {
-		const auto filters = &session->data().chatsFilters();
-		return MainListUnreadState(filters->chatsList(filterId));
-	}
-	return MainListUnreadState(
-		session->data().chatsList()
-	) | rpl::map([=](const Dialogs::UnreadState &state) {
-		return MainListMapUnreadState(session, state);
-	});
-}
 
 bool FiltersFirstLoad = true;
 
@@ -94,18 +62,11 @@ FiltersMenu::FiltersMenu(
 : _session(session)
 , _parent(parent)
 , _outer(_parent)
-, _menu(&_outer, QString(), st::windowFiltersMainMenu)
+, _menu(&_outer, TextWithEntities(), st::windowFiltersMainMenu)
 , _scroll(&_outer)
 , _container(
 	_scroll.setOwnedWidget(
-		object_ptr<Ui::VerticalLayout>(&_scroll)))
-, _includeMuted(Core::App().settings().includeMutedCounterFolders()) {
-	Core::App().notifications().settingsChanged(
-	) | rpl::filter(
-		rpl::mappers::_1 == Window::Notifications::ChangeType::IncludeMuted
-	) | rpl::start_with_next([=] {
-		_includeMuted = Core::App().settings().includeMutedCounterFolders();
-	}, _outer.lifetime());
+		object_ptr<Ui::VerticalLayout>(&_scroll))) {
 
 	_drag.timer.setCallback([=] {
 		if (_drag.filterId >= 0) {
@@ -118,12 +79,15 @@ FiltersMenu::FiltersMenu(
 FiltersMenu::~FiltersMenu() = default;
 
 void FiltersMenu::setup() {
+	setupDragAndDrop();
 	setupMainMenuIcon();
+	_menu.setIsMenuButton(true);
+	_menu.setAccessibleName(tr::lng_main_menu(tr::now));
 
 	_outer.setAttribute(Qt::WA_OpaquePaintEvent);
 	_outer.show();
 	_outer.paintRequest(
-	) | rpl::start_with_next([=](QRect clip) {
+	) | rpl::on_next([=](QRect clip) {
 		auto p = QPainter(&_outer);
 		p.setPen(Qt::NoPen);
 		p.setBrush(st::windowFiltersButton.textBg);
@@ -131,7 +95,7 @@ void FiltersMenu::setup() {
 	}, _outer.lifetime());
 
 	_parent->heightValue(
-	) | rpl::start_with_next([=](int height) {
+	) | rpl::on_next([=](int height) {
 		const auto width = (::Kotato::JsonSettings::GetBool("folders/hide_names")
 							? st::windowFiltersWidthNoText
 							: st::windowFiltersWidth);
@@ -151,14 +115,14 @@ void FiltersMenu::setup() {
 	rpl::combine(
 		rpl::single(rpl::empty) | rpl::then(filters->changed()),
 		std::move(premium)
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		refresh();
 	}, _outer.lifetime());
 
 	_session->activeChatsFilter(
 	) | rpl::filter([=](FilterId id) {
 		return (id != _activeFilterId);
-	}) | rpl::start_with_next([=](FilterId id) {
+	}) | rpl::on_next([=](FilterId id) {
 		if (!_list) {
 			_activeFilterId = id;
 			return;
@@ -181,10 +145,34 @@ void FiltersMenu::setup() {
 	});
 }
 
+void FiltersMenu::setupDragAndDrop() {
+	SetupFilterDragAndDrop(
+		&_outer,
+		&_session->session(),
+		[=](QPoint globalPos) -> std::optional<FilterId> {
+			if (!_list) {
+				return std::nullopt;
+			}
+			const auto localPos = _list->mapFromGlobal(globalPos);
+			for (const auto &[id, button] : _filters) {
+				if (button->geometry().contains(localPos)) {
+					return id;
+				}
+			}
+			return std::nullopt;
+		},
+		[=] { return _activeFilterId; },
+		[=](FilterId filterId) {
+			for (const auto &[id, button] : _filters) {
+				button->setForceRippled(id == filterId);
+			}
+		});
+}
+
 void FiltersMenu::setupMainMenuIcon() {
 	OtherAccountsUnreadState(
 		&_session->session().account()
-	) | rpl::start_with_next([=](const OthersUnreadState &state) {
+	) | rpl::on_next([=](const OthersUnreadState &state) {
 		const auto icon = !state.count
 			? nullptr
 			: !state.allMuted
@@ -279,13 +267,13 @@ void FiltersMenu::setupList() {
 		_setup = prepareButton(
 			_container,
 			-1,
-			tr::lng_filters_setup(tr::now),
+			{ TextWithEntities{ tr::lng_filters_setup(tr::now) } },
 			Ui::FilterIcon::Edit);
 	}
 	_reorder = std::make_unique<Ui::VerticalLayoutReorder>(_list, &_scroll);
 
 	_reorder->updates(
-		) | rpl::start_with_next([=](Ui::VerticalLayoutReorder::Single data) {
+	) | rpl::on_next([=](Ui::VerticalLayoutReorder::Single data) {
 		using State = Ui::VerticalLayoutReorder::State;
 		if (data.state == State::Started) {
 			++_reordering;
@@ -311,40 +299,63 @@ base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareAll() {
 base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareButton(
 		not_null<Ui::VerticalLayout*> container,
 		FilterId id,
-		const QString &title,
+		Data::ChatFilterTitle title,
 		Ui::FilterIcon icon,
 		bool toBeginning) {
+	const auto isStatic = title.isStatic;
+	const auto paused = [=] {
+		return On(PowerSaving::kEmojiChat)
+			|| _session->isGifPausedAtLeastFor(Window::GifPauseReason::Any);
+	};
 	auto prepared = object_ptr<Ui::SideBarButton>(
 		container,
 		(::Kotato::JsonSettings::GetBool("folders/hide_names")
-			? QString()
-			: id ? title : tr::lng_filters_all(tr::now)),
-		st::windowFiltersButton);
+			? TextWithEntities()
+			: id ? title.text : TextWithEntities{ tr::lng_filters_all(tr::now) }),
+		st::windowFiltersButton,
+		Core::TextContext({
+			.session = &_session->session(),
+			.customEmojiLoopLimit = isStatic ? -1 : 0,
+		}),
+		paused);
 	auto added = toBeginning
 		? container->insert(0, std::move(prepared))
 		: container->add(std::move(prepared));
 	auto button = base::unique_qptr<Ui::SideBarButton>(std::move(added));
 	const auto raw = button.get();
+	const auto nameText = id
+		? title.text.text
+		: tr::lng_filters_all(tr::now);
 	const auto &icons = Ui::LookupFilterIcon(id
 		? icon
 		: Ui::FilterIcon::All);
 	raw->setIconOverride(icons.normal, icons.active);
 	if (id >= 0) {
 		rpl::combine(
-			UnreadStateValue(&_session->session(), id),
-			_includeMuted.value()
-		) | rpl::start_with_next([=](
+			Data::UnreadStateValue(&_session->session(), id),
+			Data::IncludeMutedCounterFoldersValue()
+		) | rpl::on_next([=](
 				const Dialogs::UnreadState &state,
 				bool includeMuted) {
-			const auto muted = (state.chatsMuted + state.marksMuted);
-			const auto count = (state.chats + state.marks)
+			const auto chats = state.chats;
+			const auto chatsMuted = state.chatsMuted;
+			const auto muted = (chatsMuted + state.marksMuted);
+			const auto count = (chats + state.marks)
 				- (includeMuted ? 0 : muted);
 			const auto string = !count
 				? QString()
-				: (count > 99)
+				: (count > 999)
 				? "99+"
 				: QString::number(count);
 			raw->setBadge(string, includeMuted && (count == muted));
+			raw->setAccessibleName(count
+				? tr::lng_filter_unread_chats(
+					tr::now,
+					lt_count,
+					count,
+					lt_text,
+					nameText)
+				: nameText);
 		}, raw->lifetime());
 	}
 	raw->setActive(_session->activeChatsFilterCurrent() == id);
@@ -370,7 +381,7 @@ base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareButton(
 				|| e->type() == QEvent::DragEnter
 				|| e->type() == QEvent::DragMove
 				|| e->type() == QEvent::DragLeave;
-		}) | rpl::start_with_next([=](not_null<QEvent*> e) {
+		}) | rpl::on_next([=](not_null<QEvent*> e) {
 			if (raw->locked()) {
 				return;
 			}
@@ -404,13 +415,13 @@ base::unique_qptr<Ui::SideBarButton> FiltersMenu::prepareButton(
 void FiltersMenu::openFiltersSettings() {
 	const auto filters = &_session->session().data().chatsFilters();
 	if (filters->suggestedLoaded()) {
-		_session->showSettings(Settings::Folders::Id());
+		_session->showSettings(Settings::FoldersId());
 	} else if (!_waitingSuggested) {
 		_waitingSuggested = true;
 		filters->requestSuggested();
 		filters->suggestedUpdated(
-		) | rpl::take(1) | rpl::start_with_next([=] {
-			_session->showSettings(Settings::Folders::Id());
+		) | rpl::take(1) | rpl::on_next([=] {
+			_session->showSettings(Settings::FoldersId());
 		}, _outer.lifetime());
 	}
 }
@@ -428,18 +439,11 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 	_popupMenu = base::make_unique_q<Ui::PopupMenu>(
 		i->second.get(),
 		st::popupMenuWithIcons);
-	const auto addAction = Window::PeerMenuCallback([&](
-			Window::PeerMenuCallback::Args args) {
-		return _popupMenu->addAction(
-			args.text,
-			crl::guard(&_outer, std::move(args.handler)),
-			args.icon);
-	});
-
+	const auto addAction = Ui::Menu::CreateAddActionCallback(_popupMenu);
 	if (id) {
 		addAction(
 			tr::lng_filters_context_edit(tr::now),
-			[=] { showEditBox(id); },
+			crl::guard(&_outer, [=] { EditExistingFilter(_session, id); }),
 			&st::menuIconEdit);
 
 		auto filteredChats = [=] {
@@ -460,14 +464,18 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 				crl::guard(&_outer, [=] { setDefaultFilter(0); }),
 				&st::menuIconUnfave);
 		}
-		addAction(
-			tr::lng_filters_context_remove(tr::now),
-			[=] { showRemoveBox(id); },
-			&st::menuIconDelete);
+		addAction({
+			.text = tr::lng_filters_context_remove(tr::now),
+			.handler = crl::guard(&_outer, [=, this] {
+				_removeApi.request(base::make_weak(&_outer), _session, id);
+			}),
+			.icon = &st::menuIconDeleteAttention,
+			.isAttention = true,
+		});
 	} else {
 		auto customUnreadState = [=] {
 			const auto session = &_session->session();
-			return MainListMapUnreadState(
+			return Data::MainListMapUnreadState(
 				session,
 				session->data().chatsList()->unreadState());
 		};
@@ -484,7 +492,7 @@ void FiltersMenu::showMenu(QPoint position, FilterId id) {
 		}
 		addAction(
 			tr::lng_filters_setup_menu(tr::now),
-			[=] { openFiltersSettings(); },
+			crl::guard(&_outer, [=] { openFiltersSettings(); }),
 			&st::menuIconEdit);
 	}
 	if (_popupMenu->empty()) {
@@ -511,7 +519,6 @@ void FiltersMenu::showEditMenu(QPoint position) {
 			Ui::Toast::Show(Ui::Toast::Config{
 				.text = { ktr("ktg_filters_hide_edit_toast") },
 				.st = &st::windowArchiveToast,
-				.multiline = true,
 			});
 		}), &st::menuIconHide);
 
@@ -523,105 +530,6 @@ void FiltersMenu::setDefaultFilter(FilterId id) {
 	if (defaultFilterId != id) {
 		_session->session().account().setDefaultFilterId(id);
 		Kotato::JsonSettings::Write();
-	}
-}
-
-void FiltersMenu::showEditBox(FilterId id) {
-	EditExistingFilter(_session, id);
-}
-
-void FiltersMenu::showRemoveBox(FilterId id) {
-	const auto session = &_session->session();
-	const auto &list = session->data().chatsFilters().list();
-	const auto i = ranges::find(list, id, &Data::ChatFilter::id);
-	const auto filter = (i != end(list)) ? *i : Data::ChatFilter();
-	const auto has = filter.hasMyLinks();
-	const auto confirm = [=](Fn<void()> action, bool onlyWhenHas = false) {
-		if (!has && onlyWhenHas) {
-			action();
-			return;
-		}
-		_session->window().show(Ui::MakeConfirmBox({
-			.text = (has
-				? tr::lng_filters_delete_sure()
-				: tr::lng_filters_remove_sure()),
-			.confirmed = [=](Fn<void()> &&close) { close(); action(); },
-			.confirmText = (has
-				? tr::lng_box_delete()
-				: tr::lng_filters_remove_yes()),
-			.confirmStyle = &st::attentionBoxButton,
-		}));
-	};
-	const auto simple = [=] {
-		confirm([=] { remove(id); });
-	};
-	const auto suggestRemoving = Api::ExtractSuggestRemoving(filter);
-	if (suggestRemoving.empty()) {
-		simple();
-		return;
-	} else if (_removingRequestId) {
-		if (_removingId == id) {
-			return;
-		}
-		session->api().request(_removingRequestId).cancel();
-	}
-	_removingId = id;
-	_removingRequestId = session->api().request(
-		MTPchatlists_GetLeaveChatlistSuggestions(
-			MTP_inputChatlistDialogFilter(
-				MTP_int(id)))
-	).done(crl::guard(&_outer, [=](const MTPVector<MTPPeer> &result) {
-		_removingRequestId = 0;
-		const auto suggestRemovePeers = ranges::views::all(
-			result.v
-		) | ranges::views::transform([=](const MTPPeer &peer) {
-			return session->data().peer(peerFromMTP(peer));
-		}) | ranges::to_vector;
-		const auto chosen = crl::guard(&_outer, [=](
-				std::vector<not_null<PeerData*>> peers) {
-			remove(id, std::move(peers));
-		});
-		confirm(crl::guard(&_outer, [=] {
-			Api::ProcessFilterRemove(
-				_session,
-				filter.title(),
-				filter.iconEmoji(),
-				suggestRemoving,
-				suggestRemovePeers,
-				chosen);
-		}), true);
-	})).fail(crl::guard(&_outer, [=] {
-		_removingRequestId = 0;
-		simple();
-	})).send();
-}
-
-void FiltersMenu::remove(
-		FilterId id,
-		std::vector<not_null<PeerData*>> leave) {
-	const auto session = &_session->session();
-	const auto api = &session->api();
-	session->data().chatsFilters().apply(MTP_updateDialogFilter(
-		MTP_flags(MTPDupdateDialogFilter::Flag(0)),
-		MTP_int(id),
-		MTPDialogFilter()));
-	if (leave.empty()) {
-		api->request(MTPmessages_UpdateDialogFilter(
-			MTP_flags(MTPmessages_UpdateDialogFilter::Flag(0)),
-			MTP_int(id),
-			MTPDialogFilter()
-		)).send();
-	} else {
-		api->request(MTPchatlists_LeaveChatlist(
-			MTP_inputChatlistDialogFilter(MTP_int(id)),
-			MTP_vector<MTPInputPeer>(ranges::views::all(
-				leave
-			) | ranges::views::transform([](not_null<PeerData*> peer) {
-				return MTPInputPeer(peer->input);
-			}) | ranges::to<QVector<MTPInputPeer>>())
-		)).done([=](const MTPUpdates &result) {
-			api->applyUpdates(result);
-		}).send();
 	}
 }
 

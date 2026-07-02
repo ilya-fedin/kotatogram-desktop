@@ -8,7 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_chat_filters.h"
 
 #include "kotato/kotato_settings.h"
-#include "boxes/premium_limits_box.h"
+#include "api/api_text_entities.h"
 #include "history/history.h"
 #include "data/data_peer.h"
 #include "data/data_user.h"
@@ -102,6 +102,19 @@ bool ReadArrayOption(QJsonObject obj, QString key, std::function<void(QJsonArray
 }
 
 } // namespace
+
+TextWithEntities ForceCustomEmojiStatic(TextWithEntities text) {
+	for (auto &entity : text.entities) {
+		if (entity.type() == EntityType::CustomEmoji) {
+			entity = EntityInText(
+				EntityType::CustomEmoji,
+				entity.offset(),
+				entity.length(),
+				u"force-static:"_q + entity.data());
+		}
+	}
+	return text;
+}
 
 QJsonObject LocalFolder::toJson() {
 	auto folderObject = QJsonObject();
@@ -237,8 +250,8 @@ ChatFilter::ChatFilter(FilterId id, bool isLocal)
 
 ChatFilter::ChatFilter(
 	FilterId id,
-	const QString &title,
-	const QString &iconEmoji,
+	ChatFilterTitle title,
+	QString iconEmoji,
 	std::optional<uint8> colorIndex,
 	Flags flags,
 	base::flat_set<not_null<History*>> always,
@@ -248,13 +261,15 @@ ChatFilter::ChatFilter(
 	bool isLocal,
 	int cloudLocalOrder)
 : _id(id)
-, _title(title)
-, _iconEmoji(iconEmoji)
+, _title(std::move(title.text))
+, _iconEmoji(std::move(iconEmoji))
 , _colorIndex(colorIndex)
 , _always(std::move(always))
 , _pinned(std::move(pinned))
 , _never(std::move(never))
-, _flags(flags)
+, _flags(title.isStatic
+	? (flags | Flag::StaticTitle)
+	: (flags & ~Flag::StaticTitle))
 , _isDefault(isDefault)
 , _isLocal(isLocal)
 , _cloudLocalOrder(cloudLocalOrder) {
@@ -301,8 +316,9 @@ ChatFilter ChatFilter::local(
 	const auto defaultFilterId = owner->session().account().defaultFilterId();
 	return ChatFilter(
 		data.id,
-		data.name,
+		ChatFilterTitle{ { data.name } },
 		data.emoticon,
+		std::nullopt,
 		data.flags,
 		std::move(list),
 		std::move(pinned),
@@ -324,7 +340,8 @@ ChatFilter ChatFilter::FromTL(
 			| (data.is_bots() ? Flag::Bots : Flag(0))
 			| (data.is_exclude_muted() ? Flag::NoMuted : Flag(0))
 			| (data.is_exclude_read() ? Flag::NoRead : Flag(0))
-			| (data.is_exclude_archived() ? Flag::NoArchived : Flag(0));
+			| (data.is_exclude_archived() ? Flag::NoArchived : Flag(0))
+			| (data.is_title_noanimate() ? Flag::StaticTitle : Flag(0));
 		auto &&to_histories = ranges::views::transform([&](
 				const MTPInputPeer &input) {
 			const auto peer = Data::PeerFromInputMTP(owner, input);
@@ -351,7 +368,10 @@ ChatFilter ChatFilter::FromTL(
 		const auto defaultFilterId = owner->session().account().defaultFilterId();
 		return ChatFilter(
 			data.vid().v,
-			qs(data.vtitle()),
+			{
+				Api::ParseTextWithEntities(&owner->session(), data.vtitle()),
+				data.is_title_noanimate(),
+			},
 			qs(data.vemoticon().value_or_empty()),
 			data.vcolor()
 				? std::make_optional(data.vcolor()->v)
@@ -362,7 +382,7 @@ ChatFilter ChatFilter::FromTL(
 			{ never.begin(), never.end() },
 			(data.vid().v == defaultFilterId),
 			isLocal);
-	}, [](const MTPDdialogFilterDefault &d) {
+	}, [](const MTPDdialogFilterDefault &) {
 		return ChatFilter();
 	}, [&](const MTPDdialogFilterChatlist &data) {
 		auto &&to_histories = ranges::views::transform([&](
@@ -401,13 +421,17 @@ ChatFilter ChatFilter::FromTL(
 		};
 		return ChatFilter(
 			data.vid().v,
-			qs(data.vtitle()),
+			{
+				Api::ParseTextWithEntities(&owner->session(), data.vtitle()),
+				data.is_title_noanimate(),
+			},
 			qs(data.vemoticon().value_or_empty()),
 			data.vcolor()
 				? std::make_optional(data.vcolor()->v)
 				: std::nullopt,
 			(Flag::Chatlist
-				| (data.is_has_my_invites() ? Flag::HasMyLinks : Flag())),
+				| (data.is_has_my_invites() ? Flag::HasMyLinks : Flag())
+				| (data.is_title_noanimate() ? Flag::StaticTitle : Flag(0))),
 			std::move(list),
 			std::move(pinned),
 			{});
@@ -420,9 +444,20 @@ ChatFilter ChatFilter::withId(FilterId id) const {
 	return result;
 }
 
-ChatFilter ChatFilter::withTitle(const QString &title) const {
+ChatFilter ChatFilter::withTitle(ChatFilterTitle title) const {
 	auto result = *this;
-	result._title = title;
+	result._title = std::move(title.text);
+	if (title.isStatic) {
+		result._flags |= Flag::StaticTitle;
+	} else {
+		result._flags &= ~Flag::StaticTitle;
+	}
+	return result;
+}
+
+ChatFilter ChatFilter::withColorIndex(std::optional<uint8> c) const {
+	auto result = *this;
+	result._colorIndex = c;
 	return result;
 }
 
@@ -440,27 +475,42 @@ ChatFilter ChatFilter::withChatlist(bool chatlist, bool hasMyLinks) const {
 	return result;
 }
 
+ChatFilter ChatFilter::withoutAlways(not_null<History*> history) const {
+	auto result = *this;
+	if (CanRemoveFromChatFilter(result, history)) {
+		result._always.remove(history);
+	}
+	return result;
+}
+
 MTPDialogFilter ChatFilter::tl(FilterId replaceId) const {
 	auto always = _always;
 	auto pinned = QVector<MTPInputPeer>();
 	pinned.reserve(_pinned.size());
 	for (const auto &history : _pinned) {
-		pinned.push_back(history->peer->input);
+		pinned.push_back(history->peer->input());
 		always.remove(history);
 	}
 	auto include = QVector<MTPInputPeer>();
 	include.reserve(always.size());
 	for (const auto &history : always) {
-		include.push_back(history->peer->input);
+		include.push_back(history->peer->input());
 	}
+	auto title = MTP_textWithEntities(
+		MTP_string(_title.text),
+		Api::EntitiesToMTP(
+			nullptr,
+			_title.entities,
+			Api::ConvertOption::SkipLocal));
 	if (_flags & Flag::Chatlist) {
 		using TLFlag = MTPDdialogFilterChatlist::Flag;
 		const auto flags = TLFlag::f_emoticon
-			| (_colorIndex ? TLFlag::f_color : TLFlag(0));
+			| (_colorIndex ? TLFlag::f_color : TLFlag(0))
+			| (staticTitle() ? TLFlag::f_title_noanimate : TLFlag(0));
 		return MTP_dialogFilterChatlist(
 			MTP_flags(flags),
 			MTP_int(replaceId ? replaceId : _id),
-			MTP_string(_title),
+			std::move(title),
 			MTP_string(_iconEmoji),
 			MTP_int(_colorIndex.value_or(0)),
 			MTP_vector<MTPInputPeer>(pinned),
@@ -469,6 +519,7 @@ MTPDialogFilter ChatFilter::tl(FilterId replaceId) const {
 	using TLFlag = MTPDdialogFilter::Flag;
 	const auto flags = TLFlag::f_emoticon
 		| (_colorIndex ? TLFlag::f_color : TLFlag(0))
+		| (staticTitle() ? TLFlag::f_title_noanimate : TLFlag(0))
 		| ((_flags & Flag::Contacts) ? TLFlag::f_contacts : TLFlag(0))
 		| ((_flags & Flag::NonContacts) ? TLFlag::f_non_contacts : TLFlag(0))
 		| ((_flags & Flag::Groups) ? TLFlag::f_groups : TLFlag(0))
@@ -482,12 +533,12 @@ MTPDialogFilter ChatFilter::tl(FilterId replaceId) const {
 	auto never = QVector<MTPInputPeer>();
 	never.reserve(_never.size());
 	for (const auto &history : _never) {
-		never.push_back(history->peer->input);
+		never.push_back(history->peer->input());
 	}
 	return MTP_dialogFilter(
 		MTP_flags(flags),
 		MTP_int(replaceId ? replaceId : _id),
-		MTP_string(_title),
+		std::move(title),
 		MTP_string(_iconEmoji),
 		MTP_int(_colorIndex.value_or(0)),
 		MTP_vector<MTPInputPeer>(pinned),
@@ -519,7 +570,7 @@ LocalFolder ChatFilter::toLocal(FilterId replaceId) const {
 	return {
 		.id = replaceId ? replaceId : _id,
 		.cloudOrder = _cloudLocalOrder,
-		.name = _title,
+		.name = _title.text,
 		.emoticon = _iconEmoji,
 		.always = include,
 		.never = never,
@@ -532,8 +583,12 @@ FilterId ChatFilter::id() const {
 	return _id;
 }
 
-QString ChatFilter::title() const {
+const TextWithEntities &ChatFilter::titleText() const {
 	return _title;
+}
+
+ChatFilterTitle ChatFilter::title() const {
+	return { _title, !!(_flags & Flag::StaticTitle) };
 }
 
 bool ChatFilter::isDefault() const {
@@ -550,6 +605,10 @@ std::optional<uint8> ChatFilter::colorIndex() const {
 
 ChatFilter::Flags ChatFilter::flags() const {
 	return _flags;
+}
+
+bool ChatFilter::staticTitle() const {
+	return _flags & Flag::StaticTitle;
 }
 
 bool ChatFilter::chatlist() const {
@@ -572,7 +631,9 @@ const base::flat_set<not_null<History*>> &ChatFilter::never() const {
 	return _never;
 }
 
-bool ChatFilter::contains(not_null<History*> history) const {
+bool ChatFilter::contains(
+		not_null<History*> history,
+		bool ignoreFakeUnread) const {
 	if (_never.contains(history)) {
 		return false;
 	}
@@ -584,7 +645,7 @@ bool ChatFilter::contains(not_null<History*> history) const {
 				: user->isContact()
 				? Flag::Contacts
 				: Flag::NonContacts;
-		} else if (const auto chat = peer->asChat()) {
+		} else if (peer->isChat()) {
 			return Flag::Groups;
 		} else if (const auto channel = peer->asChannel()) {
 			if (channel->isBroadcast()) {
@@ -675,7 +736,7 @@ bool ChatFilter::contains(not_null<History*> history) const {
 			&& (!(_flags & Flag::NoRead)
 				|| state.unread
 				|| state.mention
-				|| history->fakeUnreadWhileOpened())
+				|| (!ignoreFakeUnread && history->fakeUnreadWhileOpened()))
 			&& (!(_flags & Flag::NoArchived)
 				|| (history->folderKnown() && !history->folder()))
 			&& filterUnfiltered())
@@ -716,8 +777,11 @@ void ChatFilters::clear() {
 	_list.clear();
 }
 
-void ChatFilters::setPreloaded(const QVector<MTPDialogFilter> &result) {
+void ChatFilters::setPreloaded(
+		const QVector<MTPDialogFilter> &result,
+		bool tagsEnabled) {
 	_loadRequestId = -1;
+	_tagsEnabled = tagsEnabled;
 	received(result);
 	crl::on_main(&_owner->session(), [=] {
 		if (_loadRequestId == -1) {
@@ -743,6 +807,7 @@ void ChatFilters::load(bool force) {
 	api.request(_loadRequestId).cancel();
 	_loadRequestId = api.request(MTPmessages_GetDialogFilters(
 	)).done([=](const MTPmessages_DialogFilters &result) {
+		_tagsEnabled = result.data().is_tags_enabled();
 		received(result.data().vfilters().v);
 		_loadRequestId = 0;
 	}).fail([=] {
@@ -751,6 +816,35 @@ void ChatFilters::load(bool force) {
 			_reloading = false;
 			_listChanged.fire({});
 		}
+	}).send();
+}
+
+bool ChatFilters::tagsEnabled() const {
+	return _tagsEnabled.current();
+}
+
+rpl::producer<bool> ChatFilters::tagsEnabledValue() const {
+	return _tagsEnabled.value();
+}
+
+rpl::producer<bool> ChatFilters::tagsEnabledChanges() const {
+	return _tagsEnabled.changes();
+}
+
+void ChatFilters::requestToggleTags(bool value, Fn<void()> fail) {
+	if (_toggleTagsRequestId) {
+		return;
+	}
+	_toggleTagsRequestId = _owner->session().api().request(
+		MTPmessages_ToggleDialogFilterTags(MTP_bool(value))
+	).done([=](const MTPBool &result) {
+		_tagsEnabled = value;
+		_toggleTagsRequestId = 0;
+	}).fail([=](const MTP::Error &error) {
+		const auto message = error.type();
+		_toggleTagsRequestId = 0;
+		LOG(("API Error: Toggle Tags - %1").arg(message));
+		fail();
 	}).send();
 }
 
@@ -765,7 +859,8 @@ void ChatFilters::received(const QVector<MTPDialogFilter> &list) {
 	auto changed = false;
 
 	auto addToList = [&] (ChatFilter parsed) {
-		const auto b = begin(_list) + position, e = end(_list);
+		const auto b = begin(_list) + position;
+		const auto e = end(_list);
 		const auto i = ranges::find(b, e, parsed.id(), &ChatFilter::id);
 		if (i == e) {
 			applyInsert(std::move(parsed), position);
@@ -1043,16 +1138,29 @@ bool ChatFilters::applyChange(ChatFilter &filter, ChatFilter &&updated) {
 		|| (filter.hasMyLinks() != updated.hasMyLinks());
 	const auto listUpdated = rulesChanged
 		|| pinnedChanged
-		|| (filter.title() != updated.title())
+		|| (filter.titleText() != updated.titleText())
+		|| (filter.staticTitle() != updated.staticTitle())
 		|| (filter.iconEmoji() != updated.iconEmoji());
-	if (!listUpdated && !chatlistChanged) {
+	const auto colorChanged = filter.colorIndex() != updated.colorIndex();
+	const auto colorExistenceChanged = (!filter.colorIndex())
+		!= (!updated.colorIndex());
+	if (!listUpdated && !chatlistChanged && !colorChanged) {
 		return false;
 	}
+	const auto wasFilter = std::move(filter);
+	filter = std::move(updated);
+	auto entryToRefreshHeight = (Dialogs::Entry*)(nullptr);
 	if (rulesChanged) {
 		const auto filterList = _owner->chatsFilters().chatsList(id);
+		const auto areTagsEnabled = tagsEnabled();
+		const auto tagsExistence = [&](not_null<Dialogs::Row*> row) {
+			return (!areTagsEnabled || entryToRefreshHeight)
+				? false
+				: row->entry()->hasChatsFilterTags(0);
+		};
 		const auto feedHistory = [&](not_null<History*> history) {
-			const auto now = updated.contains(history);
-			const auto was = filter.contains(history);
+			const auto now = filter.contains(history);
+			const auto was = wasFilter.contains(history);
 			if (now != was) {
 				if (now) {
 					history->addToChatList(id, filterList);
@@ -1064,7 +1172,11 @@ bool ChatFilters::applyChange(ChatFilter &filter, ChatFilter &&updated) {
 		const auto feedList = [&](not_null<const Dialogs::MainList*> list) {
 			for (const auto &entry : *list->indexed()) {
 				if (const auto history = entry->history()) {
+					const auto wasTags = tagsExistence(entry);
 					feedHistory(history);
+					if (wasTags != tagsExistence(entry)) {
+						entryToRefreshHeight = entry->entry();
+					}
 				}
 			}
 		};
@@ -1072,20 +1184,29 @@ bool ChatFilters::applyChange(ChatFilter &filter, ChatFilter &&updated) {
 		if (const auto folder = _owner->folderLoaded(Data::Folder::kId)) {
 			feedList(folder->chatsList());
 		}
-		if (exceptionsChanged && !updated.always().empty()) {
+		if (exceptionsChanged && !filter.always().empty()) {
 			_exceptionsToLoad.push_back(id);
 			Ui::PostponeCall(&_owner->session(), [=] {
 				_owner->session().api().requestMoreDialogsIfNeeded();
 			});
 		}
 	}
-	filter = std::move(updated);
 	if (pinnedChanged) {
 		const auto filterList = _owner->chatsFilters().chatsList(id);
 		filterList->pinned()->applyList(filter.pinned());
 	}
 	if (chatlistChanged) {
 		_isChatlistChanged.fire_copy(id);
+	}
+	if (colorChanged) {
+		_tagColorChanged.fire_copy(TagColorChanged{
+			.filterId = id,
+			.colorExistenceChanged = colorExistenceChanged,
+		});
+	}
+	if (entryToRefreshHeight) {
+		// Trigger a full refresh of height for the main list.
+		entryToRefreshHeight->updateChatListEntryHeight();
 	}
 	return listUpdated;
 }
@@ -1248,6 +1369,10 @@ rpl::producer<FilterId> ChatFilters::isChatlistChanged() const {
 	return _isChatlistChanged.events();
 }
 
+rpl::producer<TagColorChanged> ChatFilters::tagColorChanged() const {
+	return _tagColorChanged.events();
+}
+
 bool ChatFilters::loadNextExceptions(bool chatsListLoaded) {
 	if (_exceptionsLoadRequestId) {
 		return true;
@@ -1265,7 +1390,7 @@ bool ChatFilters::loadNextExceptions(bool chatsListLoaded) {
 			for (const auto &history : i->always()) {
 				if (!history->folderKnown()) {
 					inputs.push_back(
-						MTP_inputDialogPeer(history->peer->input));
+						MTP_inputDialogPeer(history->peer->input()));
 				}
 			}
 		}
@@ -1368,7 +1493,7 @@ rpl::producer<Ui::MoreChatsBarContent> ChatFilters::moreChatsContent(
 
 		_moreChatsUpdated.events_starting_with_copy(
 			id
-		) | rpl::start_with_next([=] {
+		) | rpl::on_next([=] {
 			consumer.put_next(Ui::MoreChatsBarContent{
 				.count = int(moreChats(id).size()),
 			});
@@ -1479,6 +1604,16 @@ void ChatFilters::saveLocal() {
 
 	::Kotato::JsonSettings::Set("folders/local", localFolders, accountId, isTestAccount);
 	::Kotato::JsonSettings::Write();
+}
+
+bool CanRemoveFromChatFilter(
+		const ChatFilter &filter,
+		not_null<History*> history) {
+	using Flag = ChatFilter::Flag;
+	const auto flagsWithoutNoReadNoArchivedNoMuted = filter.flags()
+		& ~(Flag::NoRead | Flag::NoArchived | Flag::NoMuted);
+	return (filter.always().size() > 1 || flagsWithoutNoReadNoArchivedNoMuted)
+		&& filter.contains(history);
 }
 
 } // namespace Data

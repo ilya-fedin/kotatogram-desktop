@@ -51,6 +51,7 @@ namespace Player {
 extern const char kOptionDisableAutoplayNext[];
 
 class Instance;
+class MusicListenTracker;
 struct TrackState;
 
 void start(not_null<Audio::Instance*> instance);
@@ -72,7 +73,7 @@ public:
 
 	void play(AudioMsgId::Type type);
 	void pause(AudioMsgId::Type type);
-	void stop(AudioMsgId::Type type);
+	void stop(AudioMsgId::Type type, bool asFinished = false);
 	void playPause(AudioMsgId::Type type);
 	bool next(AudioMsgId::Type type);
 	bool previous(AudioMsgId::Type type);
@@ -109,6 +110,9 @@ public:
 	[[nodiscard]] View::PlaybackProgress *roundVideoPlayback(
 		HistoryItem *item) const;
 
+	[[nodiscard]] Streaming::Instance *roundVideoPreview(
+		not_null<DocumentData*> document) const;
+
 	[[nodiscard]] AudioMsgId current(AudioMsgId::Type type) const {
 		if (const auto data = getData(type)) {
 			return data->current;
@@ -126,7 +130,7 @@ public:
 	void finishSeeking(AudioMsgId::Type type, float64 progress);
 	void cancelSeeking(AudioMsgId::Type type);
 
-	void updateVoicePlaybackSpeed();
+	void updatePlaybackSpeed();
 
 	[[nodiscard]] bool nextAvailable(AudioMsgId::Type type) const;
 	[[nodiscard]] bool previousAvailable(AudioMsgId::Type type) const;
@@ -191,6 +195,7 @@ private:
 		rpl::event_stream<> playlistChanges;
 		History *history = nullptr;
 		MsgId topicRootId = 0;
+		PeerId monoforumPeerId = 0;
 		History *migrated = nullptr;
 		Main::Session *session = nullptr;
 		bool isPlaying = false;
@@ -299,6 +304,7 @@ private:
 
 	Data _songData;
 	Data _voiceData;
+	std::unique_ptr<MusicListenTracker> _listenTracker;
 	bool _roundPlaying = false;
 
 	rpl::event_stream<Switch> _switchToNext;

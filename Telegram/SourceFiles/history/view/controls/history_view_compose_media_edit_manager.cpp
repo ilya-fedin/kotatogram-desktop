@@ -29,13 +29,14 @@ void MediaEditManager::start(
 		std::optional<bool> invertCaption) {
 	const auto media = item->media();
 	if (!media) {
+		cancel();
 		return;
 	}
 	_item = item;
 	_spoilered = spoilered.value_or(media->hasSpoiler());
 	_invertCaption = invertCaption.value_or(item->invertMedia());
 	_lifetime = item->history()->owner().itemRemoved(
-	) | rpl::start_with_next([=](not_null<const HistoryItem*> removed) {
+	) | rpl::on_next([=](not_null<const HistoryItem*> removed) {
 		if (removed == _item) {
 			cancel();
 		}
@@ -59,6 +60,8 @@ void MediaEditManager::apply(SendMenu::Action action) {
 void MediaEditManager::cancel() {
 	_menu = nullptr;
 	_item = nullptr;
+	_spoilered = false;
+	_invertCaption = false;
 	_lifetime.destroy();
 }
 

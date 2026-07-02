@@ -60,6 +60,10 @@ QString IDString(not_null<PeerData*> peer);
 	not_null<UserData*> user);
 [[nodiscard]] rpl::producer<TextWithEntities> PhoneOrHiddenValue(
 	not_null<UserData*> user);
+[[nodiscard]] rpl::producer<TextWithEntities> PhoneWithSpoilerValue(
+	not_null<UserData*> user,
+	rpl::producer<TextWithEntities> phone);
+void CopyPhoneToClipboard(rpl::producer<TextWithEntities> phone);
 [[nodiscard]] rpl::producer<TextWithEntities> UsernameValue(
 	not_null<PeerData*> peer,
 	bool primary = false);
@@ -79,9 +83,13 @@ struct LinkWithUrl {
 	QString text;
 	QString url;
 };
+[[nodiscard]] QString TopicLink(
+	not_null<Data::ForumTopic*> topic,
+	bool full);
 [[nodiscard]] rpl::producer<LinkWithUrl> LinkValue(
 	not_null<PeerData*> peer,
-	bool primary = false);
+	bool primary = false,
+	MsgId topicRootId = 0);
 
 [[nodiscard]] rpl::producer<const ChannelLocation*> LocationValue(
 	not_null<ChannelData*> channel);
@@ -119,16 +127,17 @@ struct LinkWithUrl {
 [[nodiscard]] rpl::producer<int> SharedMediaCountValue(
 	not_null<PeerData*> peer,
 	MsgId topicRootId,
+	PeerId monoforumPeerId,
 	PeerData *migrated,
 	Storage::SharedMediaType type);
 [[nodiscard]] rpl::producer<int> CommonGroupsCountValue(
 	not_null<UserData*> user);
-[[nodiscard]] rpl::producer<int> SimilarChannelsCountValue(
-	not_null<ChannelData*> channel);
+[[nodiscard]] rpl::producer<int> SimilarPeersCountValue(
+	not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<int> SavedSublistCountValue(
 	not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<int> PeerGiftsCountValue(
-	not_null<UserData*> user);
+	not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<bool> CanAddMemberValue(
 	not_null<PeerData*> peer);
 [[nodiscard]] rpl::producer<int> FullReactionsCountValue(
@@ -136,14 +145,15 @@ struct LinkWithUrl {
 [[nodiscard]] rpl::producer<bool> CanViewParticipantsValue(
 	not_null<ChannelData*> megagroup);
 
-enum class BadgeType;
+enum class BadgeType : uchar;
 [[nodiscard]] rpl::producer<BadgeType> BadgeValue(not_null<PeerData*> peer);
-[[nodiscard]] rpl::producer<DocumentId> EmojiStatusIdValue(
+[[nodiscard]] rpl::producer<EmojiStatusId> EmojiStatusIdValue(
 	not_null<PeerData*> peer);
 
 [[nodiscard]] rpl::producer<QString> BirthdayLabelText(
 	rpl::producer<Data::Birthday> birthday);
 [[nodiscard]] rpl::producer<QString> BirthdayValueText(
-	rpl::producer<Data::Birthday> birthday);
+	rpl::producer<Data::Birthday> birthday,
+	bool fullMonth = false);
 
 } // namespace Info::Profile

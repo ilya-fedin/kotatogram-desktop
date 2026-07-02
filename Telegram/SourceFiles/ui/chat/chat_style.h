@@ -10,12 +10,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/cached_round_corners.h"
 #include "ui/chat/message_bubble.h"
 #include "ui/chat/chat_style_radius.h"
+#include "ui/controls/swipe_handler_data.h"
 #include "ui/style/style_core_palette.h"
-#include "history/history_view_swipe_data.h"
 #include "layout/layout_selection.h"
+#include "styles/style_iv.h"
 #include "styles/style_basic.h"
 
+#include <vector>
+
 enum class ImageRoundRadius;
+
+namespace HistoryView {
+struct MessageSelection;
+} // namespace HistoryView
 
 namespace style {
 struct TwoIconButton;
@@ -62,11 +69,13 @@ struct MessageStyle {
 	style::TextPalette semiboldPalette;
 	style::TextPalette fwdTextPalette;
 	style::TextPalette replyTextPalette;
+	style::Markdown richPageStyle;
 	style::icon tailLeft = { Qt::Uninitialized };
 	style::icon tailRight = { Qt::Uninitialized };
 	style::icon historyRepliesIcon = { Qt::Uninitialized };
 	style::icon historyViewsIcon = { Qt::Uninitialized };
 	style::icon historyPinIcon = { Qt::Uninitialized };
+	style::icon historySilentIcon = { Qt::Uninitialized };
 	style::icon historySentIcon = { Qt::Uninitialized };
 	style::icon historyReceivedIcon = { Qt::Uninitialized };
 	style::icon historyPsaIcon = { Qt::Uninitialized };
@@ -76,6 +85,7 @@ struct MessageStyle {
 	style::icon historyCallArrowMissed = { Qt::Uninitialized };
 	style::icon historyCallIcon = { Qt::Uninitialized };
 	style::icon historyCallCameraIcon = { Qt::Uninitialized };
+	style::icon historyCallGroupIcon = { Qt::Uninitialized };
 	style::icon historyFilePlay = { Qt::Uninitialized };
 	style::icon historyFileWaiting = { Qt::Uninitialized };
 	style::icon historyFileDownload = { Qt::Uninitialized };
@@ -125,6 +135,28 @@ struct MessageImageStyle {
 	style::icon historyPageEnlarge = { Qt::Uninitialized };
 };
 
+struct ColorCollectible {
+	uint64 collectibleId = 0;
+	uint64 giftEmojiId = 0;
+	uint64 backgroundEmojiId = 0;
+	QColor accentColor;
+	std::vector<QColor> strip;
+	QColor darkAccentColor;
+	std::vector<QColor> darkStrip;
+
+	friend inline bool operator==(
+		const ColorCollectible &,
+		const ColorCollectible &) = default;
+};
+
+struct ColorCollectiblePtrCompare {
+	bool operator()(
+			const std::weak_ptr<ColorCollectible> &a,
+			const std::weak_ptr<ColorCollectible> &b) const {
+		return a.owner_before(b);
+	}
+};
+
 struct ReactionPaintInfo {
 	QPoint position;
 	QPoint effectOffset;
@@ -139,7 +171,13 @@ struct BackgroundEmojiCache {
 struct BackgroundEmojiData {
 	std::unique_ptr<Text::CustomEmoji> emoji;
 	QImage firstFrameMask;
-	std::array<BackgroundEmojiCache, 2 * (3 + kColorIndexCount)> caches;
+	base::flat_map<int, BackgroundEmojiCache> caches;
+	base::flat_map<
+		std::weak_ptr<ColorCollectible>,
+		BackgroundEmojiCache,
+		ColorCollectiblePtrCompare> collectibleCaches;
+	std::unique_ptr<Text::CustomEmoji> gift;
+	QImage firstGiftFrame;
 
 	[[nodiscard]] static int CacheIndex(
 		bool selected,
@@ -152,6 +190,8 @@ struct ChatPaintHighlight {
 	float64 opacity = 0.;
 	float64 collapsion = 0.;
 	TextSelection range;
+	int todoItemId = 0;
+	QByteArray pollOption;
 };
 
 struct ChatPaintContext {
@@ -159,16 +199,20 @@ struct ChatPaintContext {
 	const BubblePattern *bubblesPattern = nullptr;
 	ReactionPaintInfo *reactionInfo = nullptr;
 	QRect viewport;
+	QRect area;
 	QRect clip;
 	TextSelection selection;
+	bool fullMessageSelected = false;
+	const HistoryView::MessageSelection *messageSelection = nullptr;
 	ChatPaintHighlight highlight;
 	QPainterPath *highlightPathCache = nullptr;
 	mutable QRect highlightInterpolateTo;
 	crl::time now = 0;
-	HistoryView::ChatPaintGestureHorizontalData gestureHorizontal;
+	Ui::Controls::SwipeContextData gestureHorizontal;
 
 	void translate(int x, int y) {
 		viewport.translate(x, y);
+		area.translate(x, y);
 		clip.translate(x, y);
 		highlightInterpolateTo.translate(x, y);
 	}
@@ -177,11 +221,12 @@ struct ChatPaintContext {
 	}
 
 	[[nodiscard]] bool selected() const {
-		return (selection == FullSelection);
+		return fullMessageSelected;
 	}
 	[[nodiscard]] not_null<const MessageStyle*> messageStyle() const;
 	[[nodiscard]] not_null<const MessageImageStyle*> imageStyle() const;
 	[[nodiscard]] not_null<Text::QuotePaintCache*> quoteCache(
+		const std::shared_ptr<ColorCollectible> &colorCollectible,
 		uint8 colorIndex) const;
 
 	[[nodiscard]] ChatPaintContext translated(int x, int y) const {
@@ -194,8 +239,19 @@ struct ChatPaintContext {
 	}
 	[[nodiscard]] ChatPaintContext withSelection(
 			TextSelection selection) const {
+		return withSelectionState(
+			selection,
+			(selection == FullSelection),
+			nullptr);
+	}
+	[[nodiscard]] ChatPaintContext withSelectionState(
+			TextSelection selection,
+			bool fullMessageSelected,
+			const HistoryView::MessageSelection *messageSelection) const {
 		auto result = *this;
 		result.selection = selection;
+		result.fullMessageSelected = fullMessageSelected;
+		result.messageSelection = messageSelection;
 		return result;
 	}
 	[[nodiscard]] auto computeHighlightCache() const
@@ -212,14 +268,16 @@ struct ChatPaintContext {
 	};
 
 
-	// This is supported only in unwrapped media for now.
+	// This is supported only in unwrapped media and text messages for now.
 	enum class SkipDrawingParts {
 		None,
 		Content,
 		Surrounding,
+		Bubble,
 	};
 	SkipDrawingParts skipDrawingParts = SkipDrawingParts::None;
 
+	bool skipSelectionCheck = false;
 	bool outbg = false;
 	bool paused = false;
 
@@ -231,6 +289,7 @@ struct ChatPaintContextArgs {
 	QPoint visibleAreaPositionGlobal;
 	int visibleAreaTop = 0;
 	int visibleAreaWidth = 0;
+	int visibleAreaHeight = 0;
 };
 
 [[nodiscard]] int HistoryServiceMsgRadius();
@@ -264,6 +323,8 @@ struct ColorIndexValues {
 [[nodiscard]] ColorIndexValues SimpleColorIndexValues(
 	QColor color,
 	int patternIndex);
+[[nodiscard]] std::vector<Text::SpecialColor> SyntaxHighlightColors(
+	not_null<const style::palette*> palette);
 
 class ChatStyle final : public style::palette {
 public:
@@ -285,6 +346,9 @@ public:
 
 	[[nodiscard]] rpl::producer<> paletteChanged() const {
 		return _paletteChanged.events();
+	}
+	[[nodiscard]] int paletteVersion() const {
+		return _paletteVersion;
 	}
 
 	template <typename Type>
@@ -312,6 +376,8 @@ public:
 	[[nodiscard]] const MessageImageStyle &imageStyle(bool selected) const;
 
 	[[nodiscard]] int colorPatternIndex(uint8 colorIndex) const;
+	[[nodiscard]] int collectiblePatternIndex(
+		const std::shared_ptr<ColorCollectible> &collectible) const;
 	[[nodiscard]] ColorIndexValues computeColorIndexValues(
 		bool selected,
 		uint8 colorIndex) const;
@@ -323,19 +389,31 @@ public:
 	[[nodiscard]] const ColorIndexValues &coloredValues(
 		bool selected,
 		uint8 colorIndex) const;
+	[[nodiscard]] QColor collectibleNameColor(
+		const std::shared_ptr<ColorCollectible> &collectible) const;
 	[[nodiscard]] not_null<Text::QuotePaintCache*> coloredQuoteCache(
 		bool selected,
 		uint8 colorIndex) const;
 	[[nodiscard]] not_null<Text::QuotePaintCache*> coloredReplyCache(
 		bool selected,
 		uint8 colorIndex) const;
+	[[nodiscard]] not_null<Text::QuotePaintCache*> collectibleQuoteCache(
+		bool selected,
+		const std::shared_ptr<ColorCollectible> &collectible) const;
+	[[nodiscard]] not_null<Text::QuotePaintCache*> collectibleReplyCache(
+		bool selected,
+		const std::shared_ptr<ColorCollectible> &collectible) const;
 
 	[[nodiscard]] const style::TextPalette &coloredTextPalette(
 		bool selected,
 		uint8 colorIndex) const;
+	[[nodiscard]] const style::TextPalette &collectibleTextPalette(
+		bool selected,
+		const std::shared_ptr<ColorCollectible> &collectible) const;
 
 	[[nodiscard]] not_null<BackgroundEmojiData*> backgroundEmojiData(
-		uint64 id) const;
+		uint64 emojiId,
+		const std::shared_ptr<ColorCollectible> &collectible) const;
 
 	[[nodiscard]] const CornersPixmaps &msgBotKbOverBgAddCornersSmall() const;
 	[[nodiscard]] const CornersPixmaps &msgBotKbOverBgAddCornersLarge() const;
@@ -368,6 +446,9 @@ public:
 	}
 	[[nodiscard]] const style::icon &historyPinInvertedIcon() const {
 		return _historyPinInvertedIcon;
+	}
+	[[nodiscard]] const style::icon &historySilentInvertedIcon() const {
+		return _historySilentInvertedIcon;
 	}
 	[[nodiscard]] const style::icon &historySendingIcon() const {
 		return _historySendingIcon;
@@ -640,8 +721,21 @@ private:
 		kColorIndexCount * 2>;
 
 	struct ColoredPalette {
+		ColoredPalette();
+		ColoredPalette(const ColoredPalette &other);
+		ColoredPalette &operator=(const ColoredPalette &other);
+
 		std::optional<style::owned_color> linkFg;
 		style::TextPalette data;
+	};
+
+	struct CollectibleColors {
+		std::unique_ptr<Text::QuotePaintCache> quote;
+		std::unique_ptr<Text::QuotePaintCache> quoteSelected;
+		std::unique_ptr<Text::QuotePaintCache> reply;
+		std::unique_ptr<Text::QuotePaintCache> replySelected;
+		ColoredPalette palette;
+		ColoredPalette paletteSelected;
 	};
 
 	void assignPalette(not_null<const style::palette*> palette);
@@ -652,12 +746,58 @@ private:
 		ColoredQuotePaintCaches &caches,
 		bool selected,
 		uint8 colorIndex) const;
+	[[nodiscard]] not_null<Text::QuotePaintCache*> collectibleCache(
+		std::unique_ptr<Text::QuotePaintCache> &cache,
+		const std::shared_ptr<ColorCollectible> &collectible) const;
+	[[nodiscard]] CollectibleColors &resolveCollectibleCaches(
+		const std::shared_ptr<ColorCollectible> &collectible) const;
 
 	void make(style::color &my, const style::color &original) const;
 	void make(style::icon &my, const style::icon &original) const;
 	void make(
 		style::TextPalette &my,
 		const style::TextPalette &original) const;
+	void make(
+		style::QuoteStyle &my,
+		const style::QuoteStyle &original) const;
+	void make(
+		style::TextStyle &my,
+		const style::TextStyle &original) const;
+	void make(
+		style::FlatLabel &my,
+		const style::FlatLabel &original) const;
+	void make(style::Check &my, const style::Check &original) const;
+	void make(
+		style::MarkdownList &my,
+		const style::MarkdownList &original) const;
+	void make(
+		style::MarkdownQuotePaintColors &my,
+		const style::MarkdownQuotePaintColors &original) const;
+	void make(
+		style::MarkdownRule &my,
+		const style::MarkdownRule &original) const;
+	void make(
+		style::MarkdownDisplayMath &my,
+		const style::MarkdownDisplayMath &original) const;
+	void make(
+		style::MarkdownTable &my,
+		const style::MarkdownTable &original) const;
+	void make(
+		style::MarkdownDetails &my,
+		const style::MarkdownDetails &original) const;
+	void make(
+		style::MarkdownPhoto &my,
+		const style::MarkdownPhoto &original) const;
+	void make(
+		style::MarkdownAudio &my,
+		const style::MarkdownAudio &original) const;
+	void make(
+		style::MarkdownGroupedMedia &my,
+		const style::MarkdownGroupedMedia &original) const;
+	void make(
+		style::MarkdownFailure &my,
+		const style::MarkdownFailure &original) const;
+	void make(style::Markdown &my, const style::Markdown &original) const;
 	void make(
 		style::TwoIconButton &my,
 		const style::TwoIconButton &original) const;
@@ -717,6 +857,10 @@ private:
 	mutable std::array<
 		ColoredPalette,
 		2 * kColorIndexCount> _coloredTextPalettes;
+	mutable base::flat_map<
+		std::weak_ptr<ColorCollectible>,
+		CollectibleColors,
+		ColorCollectiblePtrCompare> _collectibleCaches;
 	mutable base::flat_map<uint64, BackgroundEmojiData> _backgroundEmojis;
 
 	style::TextPalette _historyPsaForwardPalette;
@@ -728,6 +872,7 @@ private:
 	style::icon _historyViewsSendingIcon = { Qt::Uninitialized };
 	style::icon _historyViewsSendingInvertedIcon = { Qt::Uninitialized };
 	style::icon _historyPinInvertedIcon = { Qt::Uninitialized };
+	style::icon _historySilentInvertedIcon = { Qt::Uninitialized };
 	style::icon _historySendingIcon = { Qt::Uninitialized };
 	style::icon _historySendingInvertedIcon = { Qt::Uninitialized };
 	style::icon _historySentInvertedIcon = { Qt::Uninitialized };
@@ -820,6 +965,7 @@ private:
 	ColorIndicesCompressed _colorIndices;
 
 	bool _dark = false;
+	int _paletteVersion = 0;
 
 	rpl::event_stream<> _paletteChanged;
 
@@ -834,12 +980,20 @@ private:
 [[nodiscard]] QColor FromNameFg(
 	not_null<const ChatStyle*> st,
 	bool selected,
-	uint8 colorIndex);
+	uint8 colorIndex,
+	const std::shared_ptr<Ui::ColorCollectible> &colorCollectible);
 
 [[nodiscard]] inline QColor FromNameFg(
 		const ChatPaintContext &context,
-		uint8 colorIndex) {
-	return FromNameFg(context.st, context.selected(), colorIndex);
+		uint8 colorIndex,
+		const std::shared_ptr<Ui::ColorCollectible> &colorCollectible) {
+	return context.outbg
+		? context.messageStyle()->msgServiceFg->c
+		: FromNameFg(
+			context.st,
+			context.selected(),
+			colorIndex,
+			colorCollectible);
 }
 
 void FillComplexOverlayRect(

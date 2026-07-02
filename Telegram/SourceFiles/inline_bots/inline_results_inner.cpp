@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwindow.h"
 #include "main/main_session.h"
 #include "window/window_session_controller.h"
+#include "ui/text/text_utilities.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
@@ -65,12 +66,12 @@ Inner::Inner(
 	setAttribute(Qt::WA_OpaquePaintEvent);
 
 	_controller->session().downloaderTaskFinished(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		updateInlineItems();
 	}, lifetime());
 
 	controller->gifPauseLevelChanged(
-	) | rpl::start_with_next([=] {
+	) | rpl::on_next([=] {
 		if (!_controller->isGifPausedAtLeastFor(
 				Window::GifPauseReason::InlineResults)) {
 			updateInlineItems();
@@ -81,7 +82,7 @@ Inner::Inner(
 		Data::PeerUpdate::Flag::Rights
 	) | rpl::filter([=](const Data::PeerUpdate &update) {
 		return (update.peer.get() == _inlineQueryPeer);
-	}) | rpl::start_with_next([=] {
+	}) | rpl::on_next([=] {
 		auto isRestricted = (_restrictedLabel != nullptr);
 		if (isRestricted != isRestrictedView()) {
 			auto h = countHeight();
@@ -90,7 +91,7 @@ Inner::Inner(
 	}, lifetime());
 
 	sizeValue(
-	) | rpl::start_with_next([=](const QSize &s) {
+	) | rpl::on_next([=](const QSize &s) {
 		_mosaic.setFullWidth(s.width());
 	}, lifetime());
 
@@ -113,19 +114,35 @@ void Inner::checkRestrictedPeer() {
 		const auto error = Data::RestrictionError(
 			_inlineQueryPeer,
 			ChatRestriction::SendInline);
-		if (error) {
-			if (!_restrictedLabel) {
-				_restrictedLabel.create(this, *error, st::stickersRestrictedLabel);
-				_restrictedLabel->show();
-				_restrictedLabel->move(st::inlineResultsLeft - st::roundRadiusSmall, st::stickerPanPadding);
-				_restrictedLabel->resizeToNaturalWidth(width() - (st::inlineResultsLeft - st::roundRadiusSmall) * 2);
-				if (_switchPmButton) {
-					_switchPmButton->hide();
-				}
-				repaintItems();
-			}
+		const auto changed = (_restrictedLabelKey != error.text);
+		if (!changed) {
 			return;
 		}
+		_restrictedLabelKey = error.text;
+		if (error) {
+			const auto window = _controller;
+			const auto peer = _inlineQueryPeer;
+			_restrictedLabel.create(
+				this,
+				rpl::single(error.boostsToLift
+					? tr::link(error.text)
+					: TextWithEntities{ error.text }),
+				st::stickersRestrictedLabel);
+			const auto lifting = error.boostsToLift;
+			_restrictedLabel->setClickHandlerFilter([=](auto...) {
+				window->resolveBoostState(peer->asChannel(), lifting);
+				return false;
+			});
+			_restrictedLabel->show();
+			updateRestrictedLabelGeometry();
+			if (_switchPmButton) {
+				_switchPmButton->hide();
+			}
+			repaintItems();
+			return;
+		}
+	} else {
+		_restrictedLabelKey = QString();
 	}
 	if (_restrictedLabel) {
 		_restrictedLabel.destroy();
@@ -134,6 +151,18 @@ void Inner::checkRestrictedPeer() {
 		}
 		repaintItems();
 	}
+}
+
+void Inner::updateRestrictedLabelGeometry() {
+	if (!_restrictedLabel) {
+		return;
+	}
+
+	auto labelWidth = width() - st::stickerPanPadding * 2;
+	_restrictedLabel->resizeToWidth(labelWidth);
+	_restrictedLabel->moveToLeft(
+		(width() - _restrictedLabel->width()) / 2,
+		st::stickerPanPadding);
 }
 
 bool Inner::isRestrictedView() {
@@ -177,6 +206,10 @@ rpl::producer<> Inner::inlineRowsCleared() const {
 }
 
 Inner::~Inner() = default;
+
+void Inner::resizeEvent(QResizeEvent *e) {
+	updateRestrictedLabelGeometry();
+}
 
 void Inner::paintEvent(QPaintEvent *e) {
 	Painter p(this);
@@ -299,7 +332,7 @@ void Inner::selectInlineResult(
 	if (const auto inlineResult = item->getResult()) {
 		if (inlineResult->onChoose(item)) {
 			_resultSelectedCallback({
-				.result = inlineResult,
+				.result = std::move(inlineResult),
 				.bot = _inlineBot,
 				.options = std::move(options),
 				.messageSendingFrom = messageSendingFrom(),
@@ -366,10 +399,13 @@ void Inner::contextMenuEvent(QContextMenuEvent *e) {
 
 		SendMenu::FillSendPreviewMenu(
 			_menu,
-			type,
+			details.type,
 			[=] { sendPreview({}); },
 			SendMenu::DefaultSilentCallback(sendPreview),
-			SendMenu::DefaultScheduleCallback(_controller->uiShow(), type, sendPreview));
+			SendMenu::DefaultScheduleCallback(
+				_controller->uiShow(),
+				details,
+				sendPreview));
 	};
 
 	const auto item = _mosaic.itemAt(_selected);
@@ -386,7 +422,7 @@ void Inner::contextMenuEvent(QContextMenuEvent *e) {
 			std::move(callback),
 			_controller->uiShow(),
 			previewDocument);
-	} else if (const auto previewPhoto = item->getPreviewPhoto()) {
+	} else if (item->getPreviewPhoto()) {
 		hideViaActions();
 	}
 
@@ -434,11 +470,16 @@ void Inner::clearInlineRows(bool resultsDeleted) {
 	_mosaic.clearRows(resultsDeleted);
 }
 
-ItemBase *Inner::layoutPrepareInlineResult(Result *result) {
-	auto it = _inlineLayouts.find(result);
+ItemBase *Inner::layoutPrepareInlineResult(std::shared_ptr<Result> result) {
+	const auto raw = result.get();
+	auto it = _inlineLayouts.find(raw);
 	if (it == _inlineLayouts.cend()) {
-		if (auto layout = ItemBase::createLayout(this, result, _inlineWithThumb)) {
-			it = _inlineLayouts.emplace(result, std::move(layout)).first;
+		if (auto layout = ItemBase::createLayout(
+				this,
+				std::move(result),
+				_inlineWithThumb,
+				_gallery)) {
+			it = _inlineLayouts.emplace(raw, std::move(layout)).first;
 			it->second->initDimensions();
 		} else {
 			return nullptr;
@@ -495,7 +536,6 @@ void Inner::refreshSwitchPmButton(const CacheEntry *entry) {
 		if (!_switchPmButton) {
 			_switchPmButton.create(this, nullptr, st::switchPmButton);
 			_switchPmButton->show();
-			_switchPmButton->setTextTransform(Ui::RoundButton::TextTransform::NoTransform);
 			_switchPmButton->addClickHandler([=] { switchPm(); });
 		}
 		_switchPmButton->setText(rpl::single(entry->switchPmText));
@@ -538,6 +578,8 @@ int Inner::refreshInlineRows(PeerData *queryPeer, UserData *bot, const CacheEntr
 
 	Assert(_inlineBot != 0);
 
+	_gallery = entry->gallery;
+
 	const auto count = int(entry->results.size());
 	const auto from = validateExistingInlineRows(entry->results);
 	auto added = 0;
@@ -546,8 +588,8 @@ int Inner::refreshInlineRows(PeerData *queryPeer, UserData *bot, const CacheEntr
 		const auto resultItems = entry->results | ranges::views::slice(
 			from,
 			count
-		) | ranges::views::transform([&](const std::unique_ptr<Result> &r) {
-			return layoutPrepareInlineResult(r.get());
+		) | ranges::views::transform([&](const std::shared_ptr<Result> &r) {
+			return layoutPrepareInlineResult(r);
 		}) | ranges::views::filter([](const ItemBase *item) {
 			return item != nullptr;
 		}) | ranges::to<std::vector<not_null<ItemBase*>>>;
@@ -571,7 +613,7 @@ int Inner::validateExistingInlineRows(const Results &results) {
 	const auto until = _mosaic.validateExistingRows([&](
 			not_null<const ItemBase*> item,
 			int untilIndex) {
-		return item->getResult() != results[untilIndex].get();
+		return item->getResult().get() != results[untilIndex].get();
 	}, results.size());
 
 	if (_mosaic.empty()) {
@@ -719,7 +761,7 @@ void Inner::switchPm() {
 	} else {
 		_inlineBot->botInfo->startToken = _switchPmStartToken;
 		_inlineBot->botInfo->inlineReturnTo
-			= _controller->currentDialogsEntryState();
+			= _controller->dialogsEntryStateCurrent();
 		_controller->showPeerHistory(
 			_inlineBot,
 			Window::SectionShow::Way::ClearStack,

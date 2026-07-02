@@ -17,6 +17,7 @@
     <url type="homepage">https://kotatogram.github.io/</url>
     <url type="bugtracker">https://github.com/kotatogram/kotatogram-desktop/issues</url>
     <url type="translate">https://crowdin.com/project/kotatogram-desktop</url>
+    <url type="vcs-browser">https://github.com/kotatogram/kotatogram-desktop</url>
     <url type="contribute">https://github.com/kotatogram/kotatogram-desktop/blob/dev/.github/CONTRIBUTING.md</url>
     <branding>
         <color type="primary" scheme_preference="light">#e1ccff</color>
@@ -486,8 +487,9 @@
     </content_rating>
     <launchable type="desktop-id">io.github.kotatogram.desktop</launchable>
     <provides>
-        <binary>kotatogram-desktop</binary>
+        <binary>Kotatogram</binary>
         <dbus type="session">io.github.kotatogram</dbus>
         <mediatype>x-scheme-handler/tg</mediatype>
+        <mediatype>x-scheme-handler/tonsite</mediatype>
     </provides>
 </component>

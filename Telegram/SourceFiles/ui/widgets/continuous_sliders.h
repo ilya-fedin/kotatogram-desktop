@@ -58,6 +58,15 @@ public:
 
 	void setMoveByWheel(bool move);
 
+	QAccessible::Role accessibilityRole() override {
+		return QAccessible::Role::Slider;
+	}
+
+	QString accessibilityValue() const override {
+		const auto percent = std::clamp(qRound(_value * 100.), 0, 100);
+		return QString::number(percent) + '%';
+	}
+
 protected:
 	void mouseMoveEvent(QMouseEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
@@ -65,6 +74,7 @@ protected:
 	void wheelEvent(QWheelEvent *e) override;
 	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
+	void keyPressEvent(QKeyEvent *e) override;
 
 	float64 fadeOpacity() const {
 		return _fadeOpacity;
@@ -137,6 +147,16 @@ private:
 
 class MediaSlider : public ContinuousSlider {
 public:
+	struct ColorOverrides {
+		std::optional<QColor> activeFg;
+		std::optional<QColor> activeBg;
+		std::optional<QColor> activeBorder;
+		std::optional<QColor> seekFg;
+		std::optional<QColor> seekBorder;
+		std::optional<QColor> inactiveFg;
+		std::optional<QColor> inactiveBorder;
+	};
+
 	MediaSlider(QWidget *parent, const style::MediaSlider &st);
 
 	void setAlwaysDisplayMarker(bool alwaysDisplayMarker) {
@@ -156,7 +176,8 @@ public:
 			int valuesCount,
 			Convert &&convert,
 			Value current,
-			Progress &&progress) {
+			Progress &&progress,
+			int indexMin = 0) {
 		Expects(valuesCount > 1);
 
 		setAlwaysDisplayMarker(true);
@@ -171,10 +192,15 @@ public:
 			}
 		}
 		setAdjustCallback([=](float64 value) {
-			return base::SafeRound(value * sectionsCount) / sectionsCount;
+			return std::max(
+				base::SafeRound(value * sectionsCount),
+				indexMin * 1.
+			) / sectionsCount;
 		});
 		setChangeProgressCallback([=](float64 value) {
-			const auto index = int(base::SafeRound(value * sectionsCount));
+			const auto index = std::max(
+				int(base::SafeRound(value * sectionsCount)),
+				indexMin);
 			progress(convert(index));
 		});
 	}
@@ -193,21 +219,32 @@ public:
 			Convert &&convert,
 			Value current,
 			Progress &&progress,
-			Finished &&finished) {
+			Finished &&finished,
+			int indexMin = 0) {
 		setPseudoDiscrete(
 			valuesCount,
 			std::forward<Convert>(convert),
 			current,
-			std::forward<Progress>(progress));
+			std::forward<Progress>(progress),
+			indexMin);
 		setChangeFinishedCallback([=](float64 value) {
 			const auto sectionsCount = (valuesCount - 1);
-			const auto index = int(base::SafeRound(value * sectionsCount));
+			const auto index = std::max(
+				int(base::SafeRound(value * sectionsCount)),
+				indexMin);
 			finished(convert(index));
 		});
 	}
 
-	void setActiveFgOverride(std::optional<QColor> color);
+	enum class DividerStyle : uchar {
+		Marks,
+		Gaps,
+	};
+
+	void setColorOverrides(ColorOverrides overrides);
 	void addDivider(float64 atValue, const QSize &size);
+	void clearDividers();
+	void setDividerStyle(DividerStyle style);
 
 protected:
 	void paintEvent(QPaintEvent *e) override;
@@ -220,13 +257,17 @@ private:
 
 	QSize getSeekDecreaseSize() const override;
 	float64 getOverDuration() const override;
+	void rebuildDividerExclusion();
 
 	const style::MediaSlider &_st;
 	bool _alwaysDisplayMarker = false;
 	bool _paintDisabled = false;
 
 	std::vector<Divider> _dividers;
-	std::optional<QColor> _activeFgOverride;
+	DividerStyle _dividerStyle = DividerStyle::Marks;
+	QRegion _dividerExclusion;
+	QSize _dividerExclusionSize;
+	ColorOverrides _overrides;
 
 };
 

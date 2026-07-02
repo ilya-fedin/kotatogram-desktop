@@ -367,6 +367,9 @@ void start() {
 } // namespace ThirdParty
 
 void start() {
+	const auto supported = base::WinRT::Supported();
+	LOG(("WinRT Supported: %1").arg(Logs::b(supported)));
+
 	// https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setlocale-wsetlocale#utf-8-support
 	setlocale(LC_ALL, ".UTF8");
 
@@ -396,6 +399,13 @@ std::optional<bool> IsDarkMode() {
 		17763);
 	static const auto kSupported = (kSystemVersion >= kDarkModeAddedVersion);
 	if (!kSupported) {
+		return std::nullopt;
+	}
+
+	HIGHCONTRAST hcf = {};
+	hcf.cbSize = static_cast<UINT>(sizeof(HIGHCONTRAST));
+	if (SystemParametersInfo(SPI_GETHIGHCONTRAST, hcf.cbSize, &hcf, FALSE)
+			&& (hcf.dwFlags & HCF_HIGHCONTRASTON)) {
 		return std::nullopt;
 	}
 
@@ -660,6 +670,36 @@ QImage DefaultApplicationIcon() {
 	return Window::Logo();
 }
 
+void LaunchMaps(const Data::LocationPoint &point, Fn<void()> fail) {
+	const auto aar = base::WinRT::TryCreateInstance<
+		IApplicationAssociationRegistration
+	>(CLSID_ApplicationAssociationRegistration);
+	if (!aar) {
+		fail();
+		return;
+	}
+
+	auto handler = base::CoTaskMemString();
+	const auto result = aar->QueryCurrentDefault(
+		L"geo",
+		AT_URLPROTOCOL,
+		AL_EFFECTIVE,
+		handler.put());
+	if (FAILED(result)
+		|| !handler
+		|| !handler.data()
+		|| std::wstring(handler.data()) == L"geo") {
+		fail();
+		return;
+	}
+
+	const auto url = u"geo:%1,%2"_q;
+	if (!QDesktopServices::openUrl(
+		url.arg(point.latAsString(), point.lonAsString()))) {
+		fail();
+	}
+}
+
 } // namespace Platform
 
 void psSendToMenu(bool send, bool silent) {
@@ -667,35 +707,9 @@ void psSendToMenu(bool send, bool silent) {
 		send,
 		silent,
 		FOLDERID_SendTo,
-		L"-sendpath",
+		L"--",
 		L"Kotatogram send to link.\n"
 		"You can disable send to menu item in Kotatogram settings.");
-}
-
-bool psLaunchMaps(const Data::LocationPoint &point) {
-	const auto aar = base::WinRT::TryCreateInstance<
-		IApplicationAssociationRegistration
-	>(CLSID_ApplicationAssociationRegistration);
-	if (!aar) {
-		return false;
-	}
-
-	auto handler = base::CoTaskMemString();
-	const auto result = aar->QueryCurrentDefault(
-		L"bingmaps",
-		AT_URLPROTOCOL,
-		AL_EFFECTIVE,
-		handler.put());
-	if (FAILED(result)
-		|| !handler
-		|| !handler.data()
-		|| std::wstring(handler.data()) == L"bingmaps") {
-		return false;
-	}
-
-	const auto url = u"bingmaps:?lvl=16&collection=point.%1_%2_Point"_q;
-	return QDesktopServices::openUrl(
-		url.arg(point.latAsString()).arg(point.lonAsString()));
 }
 
 // Stub while we still support Windows 7.

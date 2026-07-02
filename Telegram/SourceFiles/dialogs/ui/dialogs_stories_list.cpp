@@ -8,9 +8,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/ui/dialogs_stories_list.h"
 
 #include "kotato/kotato_radius.h"
+#include "kotato/kotato_settings.h"
 #include "base/event_filter.h"
 #include "base/qt_signal_producer.h"
 #include "lang/lang_keys.h"
+#include "ui/effects/round_checkbox.h"
 #include "ui/effects/outline_segments.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
@@ -21,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/dynamic_image.h"
 #include "ui/painter.h"
 #include "ui/ui_utility.h"
+#include "styles/style_chat_helpers.h"
 #include "styles/style_dialogs.h"
 
 #include <QtWidgets/QApplication>
@@ -45,33 +48,6 @@ constexpr auto kMaxTooltipNames = 3;
 	const auto &font = full.nameStyle.font;
 	const auto skip = font->spacew;
 	return full.photoLeft * 2 + full.photo - 2 * skip;
-}
-
-[[nodiscard]] object_ptr<Ui::RpWidget> MakeTooltipContent(
-		not_null<QWidget*> parent,
-		rpl::producer<TextWithEntities> text,
-		Fn<void()> hide) {
-	const auto size = st::dialogsStoriesTooltipHide.width;
-	const auto skip = st::defaultImportantTooltip.padding.right();
-	auto result = object_ptr<Ui::PaddingWrap<Ui::FlatLabel>>(
-		parent,
-		Ui::MakeNiceTooltipLabel(
-			parent,
-			std::move(text),
-			st::dialogsStoriesTooltipMaxWidth,
-			st::dialogsStoriesTooltipLabel),
-		(st::defaultImportantTooltip.padding
-			+ QMargins(0, 0, skip + size, 0)));
-	const auto button = Ui::CreateChild<Ui::IconButton>(
-		result.data(),
-		st::dialogsStoriesTooltipHide);
-	result->sizeValue(
-	) | rpl::start_with_next([=](QSize size) {
-		button->resize(button->width(), size.height());
-		button->moveToRight(0, 0, size.width());
-	}, button->lifetime());
-	button->setClickedCallback(std::move(hide));
-	return result;
 }
 
 } // namespace
@@ -106,12 +82,20 @@ List::List(
 , _st(st) {
 	setCursor(style::cur_default);
 
-	std::move(content) | rpl::start_with_next([=](Content &&content) {
+	std::move(content) | rpl::on_next([=](Content &&content) {
 		showContent(std::move(content));
 	}, lifetime());
 
 	setMouseTracking(true);
 	resize(0, _data.empty() ? 0 : st.full.height);
+
+	rpl::merge(
+		::Kotato::JsonSettings::Events("userpic_corner_radius"),
+		::Kotato::JsonSettings::Events("userpic_corner_radius_forum"),
+		::Kotato::JsonSettings::Events("userpic_corner_radius_forum_use_default")
+	) | rpl::on_next([=] {
+		update();
+	}, lifetime());
 }
 
 List::~List() = default;
@@ -147,6 +131,7 @@ void List::showContent(Content &&content) {
 			}
 			item.element.count = element.count;
 			item.element.unreadCount = element.unreadCount;
+			item.element.hasVideoStream = element.hasVideoStream;
 		} else {
 			_data.items.emplace_back(Item{ .element = element });
 		}
@@ -196,6 +181,38 @@ rpl::producer<> List::loadMoreRequests() const {
 
 rpl::producer<not_null<QWheelEvent*>> List::verticalScrollEvents() const {
 	return _verticalScrollEvents.events();
+}
+
+bool List::toggledHidden() const {
+	return _hiddenInstant || _hiddenAnimated;
+}
+
+void List::setToggledHidden(bool hiddenInstant, bool hiddenAnimated) {
+	const auto hidden = (hiddenInstant || hiddenAnimated);
+	const auto hiddenChanged = (hidden != toggledHidden());
+	const auto hiddenInstantChanged = (_hiddenInstant != hiddenInstant);
+	const auto hiddenAnimatedChanged = (_hiddenAnimated != hiddenAnimated);
+	_hiddenInstant = hiddenInstant;
+	_hiddenAnimated = hiddenAnimated;
+	if (hiddenChanged) {
+		if (_hiddenInstant || !hiddenAnimatedChanged) {
+			_hiddenAnimation.stop();
+			setVisible(!toggledHidden());
+		} else {
+			const auto from = hidden ? 0. : 1.;
+			const auto till = hidden ? 1. : 0.;
+			_hiddenAnimation.start([=] {
+				if (!_hiddenAnimation.animating()) {
+					setVisible(!toggledHidden());
+				}
+				update();
+			}, from, till, st::fadeWrapDuration, anim::linear);
+			show();
+		}
+	} else if (hiddenInstantChanged && _hiddenInstant) {
+		_hiddenAnimation.stop();
+		setVisible(!toggledHidden());
+	}
 }
 
 void List::requestExpanded(bool expanded) {
@@ -340,6 +357,10 @@ List::Layout List::computeLayout(float64 expanded) const {
 }
 
 void List::paintEvent(QPaintEvent *e) {
+	const auto hidden = _hiddenAnimation.value(toggledHidden() ? 1. : 0.);
+	if (hidden >= 1.) {
+		return;
+	}
 	const auto &st = _st.small;
 	const auto &full = _st.full;
 	const auto layout = computeLayout();
@@ -353,13 +374,18 @@ void List::paintEvent(QPaintEvent *e) {
 	};
 	const auto line = elerp(st.lineTwice, full.lineTwice) / 2.;
 	const auto photo = lerp(st.photo, full.photo);
-	const auto layered = layout.single < (photo + 4 * line);
+	const auto layered = (layout.single < (photo + 4 * line))
+		|| (hidden > 0.);
 	auto p = QPainter(this);
 	if (layered) {
 		ensureLayer();
 		auto q = QPainter(&_layer);
 		paint(q, layout, photo, line, true);
 		q.end();
+
+		if (hidden > 0.) {
+			p.setOpacity(1. - hidden);
+		}
 		p.drawImage(0, 0, _layer);
 	} else {
 		paint(p, layout, photo, line, false);
@@ -444,8 +470,15 @@ void List::paint(
 		return Single{ x, indexSmall, small, indexFull, full, y };
 	};
 	const auto hasUnread = [&](const Single &single) {
-		return (single.itemSmall && single.itemSmall->element.unreadCount)
-			|| (single.itemFull && single.itemFull->element.unreadCount);
+		const auto itemSmall = single.itemSmall;
+		const auto itemFull = single.itemFull;
+		return false
+			||(itemSmall
+				&& (itemSmall->element.unreadCount
+					|| itemSmall->element.hasVideoStream))
+			|| (itemFull
+				&& (itemFull->element.unreadCount
+					|| itemFull->element.hasVideoStream));
 	};
 	const auto enumerate = [&](auto &&paintGradient, auto &&paintOther) {
 		auto nextGradientPainted = false;
@@ -509,8 +542,15 @@ void List::paint(
 			photo);
 		const auto small = single.itemSmall;
 		const auto itemFull = single.itemFull;
-		const auto smallUnread = (small && small->element.unreadCount);
-		const auto fullUnreadCount = itemFull
+		const auto smallHasVideoStream = small
+			&& small->element.hasVideoStream;
+		const auto smallUnread = smallHasVideoStream
+			|| (small && small->element.unreadCount);
+		const auto fullHasVideoStream = itemFull
+			&& itemFull->element.hasVideoStream;
+		const auto fullUnreadCount = fullHasVideoStream
+			? 1
+			: itemFull
 			? itemFull->element.unreadCount
 			: 0;
 		const auto unreadOpacity = (smallUnread && fullUnreadCount)
@@ -528,16 +568,37 @@ void List::paint(
 			gradient.setStart(userpic.topRight());
 			gradient.setFinalStop(userpic.bottomLeft());
 			if (!fullUnreadCount) {
-				p.setPen(QPen(gradient, line));
+				if (smallHasVideoStream) {
+					p.setPen(QPen(st::attentionButtonFg->c, line));
+				} else {
+					p.setPen(QPen(gradient, line));
+				}
 				p.setBrush(Qt::NoBrush);
-				Kotato::DrawUserpicShape(p, outer, outerAdd);
+				if (const auto r = Kotato::UserpicRadius(); r >= 0.5) {
+					p.drawEllipse(outer);
+				} else if (r) {
+					p.drawRoundedRect(
+						outer,
+						outer.width() * r,
+						outer.width() * r);
+				} else {
+					p.drawRect(outer);
+				}
 			} else {
 				validateSegments(itemFull, gradient, line, true);
-				Ui::PaintOutlineSegments(
-					p,
-					outer,
-					itemFull->segments,
-					layout.segmentsSpinProgress);
+				if (const auto r = Kotato::UserpicRadius(); r < 0.5) {
+					Ui::PaintOutlineSegments(
+						p,
+						outer,
+						outer.width() * r,
+						itemFull->segments);
+				} else {
+					Ui::PaintOutlineSegments(
+						p,
+						outer,
+						itemFull->segments,
+						layout.segmentsSpinProgress);
+				}
 			}
 		}
 		p.setOpacity(1.);
@@ -552,10 +613,14 @@ void List::paint(
 			photo);
 		const auto small = single.itemSmall;
 		const auto itemFull = single.itemFull;
-		const auto smallUnread = small && small->element.unreadCount;
-		const auto fullUnreadCount = itemFull
-			? itemFull->element.unreadCount
-			: 0;
+		const auto smallUnread = small
+			&& (small->element.unreadCount
+				|| small->element.hasVideoStream);
+		const auto fullUnreadCount = !itemFull
+			? 0
+			: itemFull->element.hasVideoStream
+			? 1
+			: itemFull->element.unreadCount;
 		const auto fullCount = itemFull ? itemFull->element.count : 0;
 
 		// White circle with possible read gray line.
@@ -571,11 +636,13 @@ void List::paint(
 			p.setCompositionMode(QPainter::CompositionMode_Source);
 			p.setPen(Qt::NoPen);
 			p.setBrush(st::transparent);
-			Kotato::DrawUserpicShape(p, rect, add);
+			Kotato::DrawUserpicShape(p, rect, rect.width());
 			p.setCompositionMode(QPainter::CompositionMode_SourceOver);
 		}
 		if (hasReadLine) {
-			if (small && !small->element.unreadCount) {
+			if (small
+				&& !small->element.unreadCount
+				&& !small->element.hasVideoStream) {
 				p.setOpacity(expandRatio);
 			}
 			validateSegments(
@@ -583,11 +650,19 @@ void List::paint(
 				st::dialogsUnreadBgMuted->b,
 				lineRead,
 				false);
-			Ui::PaintOutlineSegments(
-				p,
-				rect,
-				itemFull->segments,
-				layout.segmentsSpinProgress);
+			if (const auto r = Kotato::UserpicRadius(); r < 0.5) {
+				Ui::PaintOutlineSegments(
+					p,
+					rect,
+					rect.width() * r,
+					itemFull->segments);
+			} else {
+				Ui::PaintOutlineSegments(
+					p,
+					rect,
+					itemFull->segments,
+					layout.segmentsSpinProgress);
+			}
 		}
 
 		// Userpic.
@@ -618,6 +693,19 @@ void List::paint(
 					itemFull->element.thumbnail->image(size));
 			}
 		}
+
+		if (const auto full = single.itemFull) {
+			if (full->element.hasVideoStream && expandRatio > 0.) {
+				p.setOpacity(expandRatio);
+				const auto skip = std::ceil(line + lineRead);
+				Ui::PaintLiveBadge(
+					p,
+					std::ceil(userpic.x() - skip),
+					std::ceil(userpic.y() - skip),
+					std::ceil(userpic.width() + 2 * skip),
+					st::windowBg->c);
+			}
+		}
 		p.setOpacity(1.);
 	});
 }
@@ -639,6 +727,16 @@ void List::validateSegments(
 		bool forUnread) {
 	const auto count = item->element.count;
 	const auto unread = item->element.unreadCount;
+	if (item->element.hasVideoStream) {
+		item->segments.resize(1);
+		if (forUnread) {
+			item->segments[0].width = line;
+			item->segments[0].brush = st::attentionButtonFg->b;
+		} else {
+			item->segments[0].width = 0.;
+		}
+		return;
+	}
 	if (int(item->segments.size()) != count) {
 		item->segments.resize(count);
 	}
@@ -878,7 +976,7 @@ TextWithEntities List::computeTooltipText() const {
 			break;
 		}
 	}
-	auto sequence = Ui::Text::Bold(names.front());
+	auto sequence = tr::bold(names.front());
 	if (names.size() > 1) {
 		for (auto i = 1; i + 1 != names.size(); ++i) {
 			sequence = tr::lng_stories_click_to_view_and_one(
@@ -886,22 +984,22 @@ TextWithEntities List::computeTooltipText() const {
 				lt_accumulated,
 				sequence,
 				lt_user,
-				Ui::Text::Bold(names[i]),
-				Ui::Text::WithEntities);
+				tr::bold(names[i]),
+				tr::marked);
 		}
 		sequence = tr::lng_stories_click_to_view_and_last(
 			tr::now,
 			lt_accumulated,
 			sequence,
 			lt_user,
-			Ui::Text::Bold(names.back()),
-			Ui::Text::WithEntities);
+			tr::bold(names.back()),
+			tr::marked);
 	}
 	return tr::lng_stories_click_to_view(
 		tr::now,
 		lt_users,
 		sequence,
-		Ui::Text::WithEntities);
+		tr::marked);
 }
 
 void List::setShowTooltip(
@@ -917,9 +1015,13 @@ void List::setShowTooltip(
 	};
 	_tooltip = std::make_unique<Ui::ImportantTooltip>(
 		tooltipParent,
-		MakeTooltipContent(
+		Ui::MakeTooltipWithClose(
 			tooltipParent,
 			_tooltipText.value() | rpl::filter(notEmpty),
+			st::dialogsStoriesTooltipMaxWidth,
+			st::dialogsStoriesTooltipLabel,
+			st::importantTooltipHide,
+			st::defaultImportantTooltip.padding,
 			_tooltipHide),
 		st::dialogsStoriesTooltip);
 	const auto tooltip = _tooltip.get();
@@ -948,7 +1050,7 @@ void List::setShowTooltip(
 			notEmpty
 		) | rpl::distinct_until_changed(),
 		tooltipParent->windowActiveValue()
-	) | rpl::start_with_next([=](bool, bool, bool active) {
+	) | rpl::on_next([=](bool, bool, bool active) {
 		_tooltipWindowActive = active;
 		if (!isHidden()) {
 			toggleTooltip(false);
@@ -956,7 +1058,7 @@ void List::setShowTooltip(
 	}, tooltip->lifetime());
 
 	shownValue(
-	) | rpl::skip(1) | rpl::start_with_next([=](bool shown) {
+	) | rpl::skip(1) | rpl::on_next([=](bool shown) {
 		toggleTooltip(true);
 	}, tooltip->lifetime());
 }

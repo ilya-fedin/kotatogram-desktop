@@ -19,6 +19,10 @@ namespace Bot {
 struct SendCommandRequest;
 } // namespace Bot
 
+namespace ChatHelpers {
+struct FileChosen;
+} // namespace ChatHelpers
+
 namespace SendMenu {
 struct Details;
 } // namespace SendMenu
@@ -31,7 +35,9 @@ namespace Data {
 class Thread;
 class WallPaper;
 struct ForwardDraft;
+struct DrawToReplyRequest;
 class Forum;
+class SavedMessages;
 struct ReportInput;
 } // namespace Data
 
@@ -91,6 +97,8 @@ namespace Core {
 class Changelogs;
 } // namespace Core
 
+extern const char kForceComposeSearchOneColumn[];
+
 class MainWidget final
 	: public Ui::RpWidget
 	, private Media::Player::FloatDelegate {
@@ -119,6 +127,7 @@ public:
 	void showAnimated(QPixmap oldContentCache, bool back = false);
 
 	void activate();
+	void handleStartFiles(QStringList interprets, QStringList paths);
 
 	void windowShown();
 
@@ -140,6 +149,7 @@ public:
 	void checkMainSectionToLayer();
 
 	[[nodiscard]] SendMenu::Details sendMenuDetails() const;
+	bool processChosenSticker(ChatHelpers::FileChosen &&chosen);
 
 	[[nodiscard]] bool animatingShow() const;
 
@@ -158,12 +168,16 @@ public:
 		const QString &text) const;
 	bool filesOrForwardDrop(
 		not_null<Data::Thread*> thread,
-		not_null<const QMimeData*> data);
+		not_null<const QMimeData*> data,
+		bool forumResolved = false);
 
 	void sendBotCommand(Bot::SendCommandRequest request);
 	void hideSingleUseKeyboard(FullMsgId replyToId);
 
-	void searchMessages(const QString &query, Dialogs::Key inChat, UserData *from = nullptr);
+	void searchMessages(
+		const QString &query,
+		Dialogs::Key inChat,
+		PeerData *searchFrom = nullptr);
 
 	void setChatBackground(
 		const Data::WallPaper &background,
@@ -193,6 +207,7 @@ public:
 		PeerId peer,
 		const SectionShow &params,
 		MsgId msgId);
+	bool handleDrawToReplyRequest(Data::DrawToReplyRequest request);
 	void showMessage(
 		not_null<const HistoryItem*> item,
 		const SectionShow &params);
@@ -213,6 +228,7 @@ public:
 
 	bool areRecentActionsOpened();
 	void dialogsCancelled();
+	void toggleFiltersMenu(bool value) const;
 
 private:
 	void paintEvent(QPaintEvent *e) override;
@@ -243,7 +259,7 @@ private:
 
 	void setCurrentCall(Calls::Call *call);
 	void setCurrentGroupCall(Calls::GroupCall *call);
-	void createCallTopBar();
+	void createCallTopBar(Calls::Call *call, Calls::GroupCall *group);
 	void destroyCallTopBar();
 	void callTopBarHeightUpdated(int callTopBarHeight);
 

@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 namespace Ui {
 class Show;
+class FlatLabel;
 } // namespace Ui
 
 namespace Info {
@@ -22,10 +23,6 @@ class Controller;
 namespace Info::ChannelEarn {
 
 class Memento;
-
-[[nodiscard]] QImage IconCurrency(
-	const style::FlatLabel &label,
-	const QColor &c);
 
 class InnerWidget final : public Ui::VerticalLayout {
 public:
@@ -66,5 +63,11 @@ private:
 	rpl::event_stream<> _stateUpdated;
 
 };
+
+void AddEmojiToMajor(
+	not_null<Ui::FlatLabel*> label,
+	rpl::producer<CreditsAmount> value,
+	std::optional<bool> isIn,
+	std::optional<QMargins> margins);
 
 } // namespace Info::ChannelEarn

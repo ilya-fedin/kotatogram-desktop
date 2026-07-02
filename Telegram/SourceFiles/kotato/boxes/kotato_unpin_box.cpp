@@ -73,7 +73,7 @@ void UnpinMessageBox::unpinMessage() {
 	//auto flags = MTPmessages_UpdatePinnedMessage::Flags(0);
 	_requestId = _api.request(MTPmessages_UpdatePinnedMessage(
 		MTP_flags(MTPmessages_UpdatePinnedMessage::Flag::f_unpin),
-		_peer->input,
+		_peer->input(),
 		MTP_int(_msgId)
 	)).done([=](const MTPUpdates &result) {
 		_peer->session().api().applyUpdates(result);

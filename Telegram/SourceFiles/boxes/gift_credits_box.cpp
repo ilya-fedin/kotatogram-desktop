@@ -8,7 +8,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/gift_credits_box.h"
 
 #include "api/api_credits.h"
+#include "boxes/filters/edit_filter_chats_list.h"
 #include "boxes/peer_list_controllers.h"
+#include "boxes/star_gift_box.h" // CollectGiftFrequentUsers.
+#include "core/ui_integration.h" // TextContext.
 #include "data/data_peer.h"
 #include "data/data_session.h"
 #include "data/data_user.h"
@@ -23,7 +26,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rect.h"
 #include "ui/text/text_utilities.h"
 #include "ui/vertical_list.h"
-#include "ui/widgets/label_with_custom_emoji.h"
+#include "ui/wrap/vertical_layout.h"
 #include "window/window_session_controller.h"
 #include "styles/style_boxes.h"
 #include "styles/style_channel_earn.h"
@@ -34,6 +37,77 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_premium.h"
 
 namespace Ui {
+namespace {
+
+[[nodiscard]] object_ptr<RpWidget> MakeFrequentRecipientsList(
+		not_null<Main::Session*> session,
+		std::vector<not_null<UserData*>> users,
+		Fn<void(not_null<PeerData*>)> chosen) {
+	class FrequentController final : public PeerListController {
+	public:
+		FrequentController(
+			not_null<Main::Session*> session,
+			std::vector<not_null<UserData*>> users,
+			Fn<void(not_null<PeerData*>)> chosen)
+		: _session(session)
+		, _users(std::move(users))
+		, _chosen(std::move(chosen)) {
+		}
+
+		void prepare() override {
+			for (const auto &user : _users) {
+				delegate()->peerListAppendRow(
+					std::make_unique<PeerListRow>(user));
+			}
+			delegate()->peerListRefreshRows();
+		}
+		void loadMoreRows() override {
+		}
+		void rowClicked(not_null<PeerListRow*> row) override {
+			_chosen(row->peer());
+		}
+		Main::Session &session() const override {
+			return *_session;
+		}
+
+	private:
+		const not_null<Main::Session*> _session;
+		const std::vector<not_null<UserData*>> _users;
+		const Fn<void(not_null<PeerData*>)> _chosen;
+
+	};
+
+	auto result = object_ptr<Ui::VerticalLayout>((QWidget*)nullptr);
+	const auto container = result.data();
+
+	Ui::AddSkip(container);
+	container->add(CreatePeerListSectionSubtitle(
+		container,
+		tr::lng_settings_top_peers_title()));
+	Ui::AddSkip(container, st::defaultVerticalListSkip / 2);
+
+	const auto delegate
+		= container->lifetime().make_state<PeerListContentDelegateSimple>();
+	const auto controller
+		= container->lifetime().make_state<FrequentController>(
+			session,
+			std::move(users),
+			std::move(chosen));
+	controller->setStyleOverrides(&st::peerListSingleRow);
+	const auto content = container->add(
+		object_ptr<PeerListContent>(container, controller));
+	delegate->setContent(content);
+	controller->setDelegate(delegate);
+
+	Ui::AddSkip(container);
+	container->add(CreatePeerListSectionSubtitle(
+		container,
+		tr::lng_contacts_header()));
+
+	return result;
+}
+
+} // namespace
 
 void GiftCreditsBox(
 		not_null<Ui::GenericBox*> box,
@@ -49,71 +123,44 @@ void GiftCreditsBox(
 
 	Ui::AddSkip(content);
 	Ui::AddSkip(content);
+	Ui::AddSkip(content);
 	const auto &stUser = st::premiumGiftsUserpicButton;
 	const auto userpicWrap = content->add(
-		object_ptr<Ui::CenterWrap<>>(
-			content,
-			object_ptr<Ui::UserpicButton>(content, peer, stUser)));
+		object_ptr<Ui::UserpicButton>(content, peer, stUser),
+		style::al_top);
 	userpicWrap->setAttribute(Qt::WA_TransparentForMouseEvents);
 	Ui::AddSkip(content);
 	Ui::AddSkip(content);
 
-	{
-		const auto widget = Ui::CreateChild<Ui::RpWidget>(content);
-		using ColoredMiniStars = Ui::Premium::ColoredMiniStars;
-		const auto stars = widget->lifetime().make_state<ColoredMiniStars>(
-			widget,
-			false,
-			Ui::Premium::MiniStars::Type::BiStars);
-		stars->setColorOverride(Ui::Premium::CreditsIconGradientStops());
-		widget->resize(
-			st::boxWidth - stUser.photoSize,
-			stUser.photoSize * 2);
-		content->sizeValue(
-		) | rpl::start_with_next([=](const QSize &size) {
-			widget->moveToLeft(stUser.photoSize / 2, 0);
-			const auto starsRect = Rect(widget->size());
-			stars->setPosition(starsRect.topLeft());
-			stars->setSize(starsRect.size());
-			widget->lower();
-		}, widget->lifetime());
-		widget->paintRequest(
-		) | rpl::start_with_next([=](const QRect &r) {
-			auto p = QPainter(widget);
-			p.fillRect(r, Qt::transparent);
-			stars->paint(p);
-		}, widget->lifetime());
-	}
+	Settings::AddMiniStars(
+		content,
+		Ui::CreateChild<Ui::RpWidget>(content),
+		stUser.photoSize,
+		box->width(),
+		2.);
 	{
 		Ui::AddSkip(content);
-		const auto arrow = Ui::Text::SingleCustomEmoji(
-			peer->owner().customEmojiManager().registerInternalEmoji(
-				st::topicButtonArrow,
-				st::channelEarnLearnArrowMargins,
-				false));
 		auto link = tr::lng_credits_box_history_entry_gift_about_link(
 			lt_emoji,
-			rpl::single(arrow),
-			Ui::Text::RichLangValue
+			rpl::single(Ui::Text::IconEmoji(&st::textMoreIconEmoji)),
+			tr::rich
 		) | rpl::map([](TextWithEntities text) {
-			return Ui::Text::Link(
+			return tr::link(
 				std::move(text),
 				u"internal:stars_examples"_q);
 		});
 		content->add(
-			object_ptr<Ui::CenterWrap<>>(
+			object_ptr<Ui::FlatLabel>(
 				content,
-				Ui::CreateLabelWithCustomEmoji(
-					content,
-					tr::lng_credits_box_history_entry_gift_out_about(
-						lt_user,
-						rpl::single(TextWithEntities{ peer->shortName() }),
-						lt_link,
-						std::move(link),
-						Ui::Text::RichLangValue),
-					{ .session = &peer->session() },
-					st::creditsBoxAbout)),
-			st::boxRowPadding);
+				tr::lng_credits_box_history_entry_gift_out_about(
+					lt_user,
+					rpl::single(TextWithEntities{ peer->shortName() }),
+					lt_link,
+					std::move(link),
+					tr::rich),
+				st::creditsBoxAbout),
+			st::boxRowPadding,
+			style::al_top);
 	}
 	Ui::AddSkip(content);
 	Ui::AddSkip(box->verticalLayout());
@@ -122,8 +169,11 @@ void GiftCreditsBox(
 		Main::MakeSessionShow(box->uiShow(), &peer->session()),
 		box->verticalLayout(),
 		peer,
-		0,
-		[=] { gifted(); box->uiShow()->hideLayer(); });
+		CreditsAmount(),
+		[=] { gifted(); box->uiShow()->hideLayer(); },
+		box->showFinishes(),
+		tr::lng_credits_summary_options_subtitle(),
+		{});
 
 	box->setPinnedToBottomContent(
 		object_ptr<Ui::VerticalLayout>(box));
@@ -139,7 +189,8 @@ void ShowGiftCreditsBox(
 			not_null<Main::Session*> session,
 			Fn<void(not_null<PeerData*>)> choose)
 		: ContactsBoxController(session)
-		, _choose(std::move(choose)) {
+		, _choose(std::move(choose))
+		, _frequentUsers(CollectGiftFrequentUsers(session)) {
 		}
 
 	protected:
@@ -151,7 +202,20 @@ void ShowGiftCreditsBox(
 				|| user->isInaccessible()) {
 				return nullptr;
 			}
+			if (ranges::contains(_frequentUsers, user)) {
+				return nullptr;
+			}
 			return ContactsBoxController::createRow(user);
+		}
+
+		void prepareViewHook() override {
+			if (_frequentUsers.empty()) {
+				return;
+			}
+			delegate()->peerListSetAboveWidget(MakeFrequentRecipientsList(
+				&session(),
+				_frequentUsers,
+				_choose));
 		}
 
 		void rowClicked(not_null<PeerListRow*> row) override {
@@ -160,6 +224,7 @@ void ShowGiftCreditsBox(
 
 	private:
 		const Fn<void(not_null<PeerData*>)> _choose;
+		const std::vector<not_null<UserData*>> _frequentUsers;
 
 	};
 	auto initBox = [=](not_null<PeerListBox*> peersBox) {

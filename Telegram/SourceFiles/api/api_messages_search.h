@@ -20,6 +20,11 @@ struct ReactionId;
 
 namespace Api {
 
+enum class SearchFilter {
+	NoFilter,
+	Pinned,
+};
+
 struct FoundMessages {
 	int total = -1;
 	MessageIdsList messages;
@@ -32,6 +37,8 @@ public:
 		QString query;
 		PeerData *from = nullptr;
 		std::vector<Data::ReactionId> tags;
+		MsgId topMsgId;
+		SearchFilter filter = SearchFilter::NoFilter;
 
 		friend inline bool operator==(
 			const Request &,

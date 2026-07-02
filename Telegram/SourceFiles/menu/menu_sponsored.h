@@ -11,6 +11,11 @@ namespace ChatHelpers {
 class Show;
 } // namespace ChatHelpers
 
+namespace Data {
+struct SponsoredMessageDetails;
+struct SponsoredReportAction;
+} // namespace Data
+
 namespace Ui {
 class RpWidget;
 namespace Menu {
@@ -22,18 +27,39 @@ class HistoryItem;
 
 namespace Menu {
 
+enum class SponsoredPhrases {
+	Channel,
+	Bot,
+	Search,
+};
+
+struct SponsoredMenuSettings {
+	bool dark = false;
+	bool skipAbout = false;
+	bool skipInfo = false;
+};
+
 void FillSponsored(
-	not_null<Ui::RpWidget*> parent,
 	const Ui::Menu::MenuCallback &addAction,
 	std::shared_ptr<ChatHelpers::Show> show,
-	not_null<HistoryItem*> item,
-	bool mediaViewer);
+	SponsoredPhrases phrases,
+	const Data::SponsoredMessageDetails &details,
+	Data::SponsoredReportAction report,
+	SponsoredMenuSettings settings = {});
+
+void FillSponsored(
+	const Ui::Menu::MenuCallback &addAction,
+	std::shared_ptr<ChatHelpers::Show> show,
+	const FullMsgId &fullId,
+	SponsoredMenuSettings settings = {});
 
 void ShowSponsored(
 	not_null<Ui::RpWidget*> parent,
 	std::shared_ptr<ChatHelpers::Show> show,
-	not_null<HistoryItem*> item);
+	const FullMsgId &fullId);
 
-void ShowSponsoredAbout(std::shared_ptr<ChatHelpers::Show> show);
+void ShowSponsoredAbout(
+	std::shared_ptr<ChatHelpers::Show> show,
+	const FullMsgId &fullId);
 
 } // namespace Menu
